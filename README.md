@@ -1,13 +1,10 @@
 # mini-agent
 
-基于 `smolagents` 和本地 Ollama 模型的轻量级编程 Agent，提供**极速生成**与**深思验证**两种工作模式。
+基于 `smolagents` 和本地 Ollama 模型的轻量级编程 Agent，提供**极速流**与**深思流**两种 ReAct 模式。
 
 ## 设计原则
 
-**配置与流程分离。** 所有可调参数和提示词模板以 JSON 文件存放在 `config/` 目录中，Python 代码只负责加载和执行，无需修改代码即可调整行为。
-
-- `config/config.json` — Ollama 连接配置（地址、模型）
-- `config/prompts.json` — Agent 提示词模板
+**模型由调用者创建并传入。** Agent 本身不接触任何模型配置——你决定用哪个模型、哪个 provider、什么温度。配置仅保留提示词模板 `config/prompts.json`。
 
 详细实现说明见 [doc/implementation.md](doc/implementation.md)。
 
@@ -28,31 +25,34 @@ cd mini_agent
 uv sync
 ```
 
-### 配置
-
-编辑 `config/config.json`，将 `base_url` 和 `default_model` 改为你的 Ollama 地址和模型：
-
-```json
-{
-  "base_url": "http://YOUR_OLLAMA_HOST:11434/v1",
-  "default_model": "ornith:9b"
-}
-```
-
 ---
 
 ## 使用
 
-### 极速流 — 快速代码生成
+### 创建模型
+
+```python
+from mini_agent import get_local_model
+
+model = get_local_model(
+    model_name="ornith:9b",
+    api_base="http://YOUR_OLLAMA_HOST:11434",
+    temperature=0.0,
+)
+```
+
+也可以直接使用 `LiteLLMModel` 传入任意 provider。
+
+### 极速流 — 单次代码生成
 
 ```python
 from mini_agent import run_fast_agent
 
-result = run_fast_agent("Write a function to compute Fibonacci numbers")
+result = run_fast_agent("Write a function to compute Fibonacci numbers", model=model)
 print(result)
 ```
 
-温度锁定 `0.0`，最大 2 步，无外部工具，适合简单语法转换和代码生成。
+温度建议 `0.0`，`max_steps=1`，无外部工具，纯 ReAct 单步推理。
 
 ### 深思流 — 自动纠错循环
 
@@ -61,30 +61,27 @@ from mini_agent import run_deep_agent
 
 result = run_deep_agent(
     "Write a script that downloads a webpage and extracts all links",
+    model=model,
     target_file="output.py",
+    max_steps=8,
 )
 print(result)
 ```
 
-温度 `0.4~0.5`，最大 15 步，挂载文件写入/执行工具。
-Agent 自动执行：生成代码 → 写入文件 → 运行 → 读错误 → 修复 → 重复。
+温度建议 `0.4~0.5`，挂载文件写入/执行工具。完整的 Reason → Act → Observe → Repeat 循环。
 
 ---
 
 ## 验证
-
-运行端到端验证：
 
 ```bash
 uv run python3 verify/verify.py
 ```
 
 验证步骤：
-1. **Config 加载** — 确认 `config/config.json` 正确读取
+1. **Prompt 加载** — 确认 `prompts.json` 正确读取
 2. **模型连通性** — 调用 Ollama 模型返回简单回复
 3. **Deep Agent 循环优化** — 让 Agent 编写质数筛法对比脚本并自动纠错
-
-验证通过标准：Agent 必须能在"生成 → 执行 → 修复"循环中产出正确结果。
 
 ---
 
@@ -93,15 +90,18 @@ uv run python3 verify/verify.py
 ```
 mini_agent/
 ├── config/
-│   ├── config.json              # Ollama 连接配置
-│   └── prompts.json             # 提示词模板
+│   └── prompts.json             # 提示词模板（唯一配置文件）
 ├── doc/
 │   └── implementation.md        # 实现细节与总结
+├── examples/
+│   ├── basic_usage.py           # 最简使用示例
+│   ├── fast_vs_deep.py          # 极速 vs 深思 对比
+│   └── custom_model.py          # 手动构造 LiteLLMModel
 ├── src/
 │   └── mini_agent/
 │       ├── __init__.py
-│       ├── config.py            # 配置加载器
-│       └── agent.py             # Agent 实现
+│       ├── config.py            # 提示词加载器
+│       └── agent.py             # ReAct Agent 实现
 ├── verify/
 │   └── verify.py                # 验证脚本
 ├── pyproject.toml

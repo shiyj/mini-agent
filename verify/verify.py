@@ -2,9 +2,9 @@
 """End-to-end verification for mini_agent with retry.
 
 Tests:
-1. Config loading from config/config.json
+1. Prompt loading from config/prompts.json
 2. Model connectivity via LiteLLMModel (simple completion)
-3. Deep-thinking agent on a loop-optimization code task (with retry)
+3. Deep agent on a loop-optimisation task (with retry)
 """
 
 import sys
@@ -13,6 +13,14 @@ import subprocess
 import os
 from pathlib import Path
 
+from mini_agent import (
+    load_prompts,
+    build_prompt,
+    get_local_model,
+    run_deep_agent,
+    run_fast_agent,
+)
+
 
 MAX_RETRIES = 10
 HERE = Path(__file__).resolve().parent
@@ -20,31 +28,51 @@ PROJECT_ROOT = HERE.parent
 OUTPUT_TARGET = str(HERE / "verify_output.py")
 
 
-def step_config() -> None:
-    from mini_agent import load_config
-    config = load_config()
-    assert config.base_url and "11434" in config.base_url
-    assert config.models
-    print(f"[PASS] Config: {config.base_url}, models={list(config.models.keys())}")
+# ---------------------------------------------------------------------------
+# Model — shared across all steps
+# ---------------------------------------------------------------------------
+
+_MODEL: object | None = None
+
+
+def _model():
+    global _MODEL
+    if _MODEL is None:
+        _MODEL = get_local_model(
+            model_name="ornith:9b",
+            api_base="http://172.20.104.158:11434",
+            temperature=0.0,
+            ctx_size=4096,
+        )
+    return _MODEL
+
+
+# ---------------------------------------------------------------------------
+# Steps
+# ---------------------------------------------------------------------------
+
+
+def step_prompts() -> None:
+    prompts = load_prompts()
+    assert "fast_agent" in prompts, "prompts.json missing fast_agent key"
+    assert "deep_agent" in prompts, "prompts.json missing deep_agent key"
+    rendered = build_prompt("fast_agent", prompt="hello")
+    assert "hello" in rendered
+    print(f"[PASS] Prompts loaded, keys={list(prompts.keys())}")
 
 
 def step_model_connectivity() -> None:
-    from mini_agent import get_local_model, load_config
-    config = load_config()
-    model = get_local_model(
-        model_name=config.get_default_model(),
-        temperature=0.0, ctx_size=4096, config=config,
-    )
+    model = _model()
     response = model([
         {"role": "system", "content": [{"type": "text", "text": "Reply with exactly one word."}]},
         {"role": "user", "content": [{"type": "text", "text": "Say hello."}]},
     ])
     content = response.content.strip() if hasattr(response, "content") else str(response)
+    assert len(content) > 0
     print(f"[PASS] Model responded: {content[:80]}")
 
 
 def _check_script(target: str) -> str | None:
-    """Run the generated script and verify it prints identical prime sets."""
     if not os.path.exists(target):
         return f"{target} does not exist"
     code = open(target).read()
@@ -65,12 +93,10 @@ def _check_script(target: str) -> str | None:
     if result.returncode != 0:
         return f"exit={result.returncode}: {output[:400]}"
 
-    # Check that the script confirms both sets match
     ok_words = ["identical", "same", "pass", "match", "success", "verified"]
     if not any(w in output.lower() for w in ok_words):
         return f"Script did not confirm match:\n{output[:400]}"
 
-    # Verify prime count
     if "9592" not in output and "9,592" not in output:
         if "error" in output.lower() and "differ" in output.lower():
             return f"Output says sets differ:\n{output[:400]}"
@@ -82,18 +108,22 @@ def _check_script(target: str) -> str | None:
 
 
 def step_deep_agent_loop_optimization() -> None:
-    from mini_agent import run_deep_agent, load_config
-
-    config = load_config()
     target = OUTPUT_TARGET
-    model_name = config.get_default_model()
 
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"  Attempt {attempt}/{MAX_RETRIES} ...", flush=True)
         if os.path.exists(target):
             os.remove(target)
 
-        temp = max(0.4 - attempt * 0.03, 0.1)
+        # Heating strategy: each failure increases temperature so the model
+        # tries a different approach instead of getting stuck in the same bug.
+        temp = min(0.45 + (attempt - 1) * 0.03, 0.7)
+        model = get_local_model(
+            model_name="ornith:9b",
+            api_base="http://172.20.104.158:11434",
+            temperature=temp,
+            ctx_size=16384,
+        )
 
         start = time.time()
         result = run_deep_agent(
@@ -107,12 +137,9 @@ def step_deep_agent_loop_optimization() -> None:
                 "3. Time both, print which is faster.\n"
                 "4. Verify both produce identical prime sets (both must find 9592 primes)."
             ),
+            model=model,
             target_file=target,
-            model_name=model_name,
-            temperature=temp,
             max_steps=15,
-            ctx_size=16384,
-            config=config,
         )
         elapsed = time.time() - start
         print(f"  Finished in {elapsed:.0f}s (temp={temp:.2f})", flush=True)
@@ -129,13 +156,18 @@ def step_deep_agent_loop_optimization() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
 def main():
     print("=" * 60)
     print("mini-agent Verification Suite")
     print("=" * 60)
 
-    print("\n[1/3] Config loading .......................", end=" ")
-    step_config()
+    print("\n[1/3] Prompt loading .......................", end=" ")
+    step_prompts()
 
     print("\n[2/3] Model connectivity ...................", end=" ")
     step_model_connectivity()

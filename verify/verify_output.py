@@ -1,54 +1,82 @@
+#!/usr/bin/env python3
+"""
+Sieve of Eratosthenes comparison: standard vs wheel-optimized version.
+N = 100_000, expected prime count = 9592.
+"""
+
 import time
+import math
 
-N = 100000
 
-# ---- Standard Sieve of Eratosthenes ----
-def sieve_standard(n):
-    is_prime = [True] * (n + 1)
-    is_prime[0] = False
-    is_prime[1] = False
-    for i in range(2, int(n**0.5) + 1):
-        if is_prime[i]:
-            for j in range(i*i, n+1, i):
-                is_prime[j] = False
-    return [i for i in range(2, n+1) if is_prime[i]]
+def standard_sieve(n: int) -> list[int]:
+    """Standard Sieve of Eratosthenes."""
+    is_prime = bytearray(b'\x01') * (n + 1)
+    is_prime[0] = is_prime[1] = 0
+    for p in range(2, int(math.isqrt(n)) + 1):
+        if is_prime[p]:
+            step = p * p
+            while step <= n:
+                is_prime[step] = 0
+                step += p
+    return [i for i in range(2, n + 1) if is_prime[i]]
 
-# ---- Wheel Sieve (wheel of 2*3*5*7 = 210) ----
-def sieve_wheel(n):
-    is_prime = [True] * (n + 1)
-    is_prime[0] = False
-    is_prime[1] = False
-    
-    # Mark multiples of the first four primes: 2, 3, 5, 7
+
+def wheel_sieve(n: int) -> list[int]:
+    """Wheel sieve: pre-mark multiples of 2,3,5,7 then continue normally."""
+    is_prime = bytearray(b'\x01') * (n + 1)
+    is_prime[0] = is_prime[1] = 0
+
+    # First pass: mark multiples of the first four primes
     for p in (2, 3, 5, 7):
-        for j in range(p*p, n+1, p):
-            is_prime[j] = False
-    
-    # For i from 11 to sqrt(n), if still prime, mark its multiples
-    limit = int(n**0.5) + 1
+        step = p * p
+        while step <= n:
+            is_prime[step] = 0
+            step += p
+
+    # Second pass: for remaining i from 11 to sqrt(N)
+    limit = int(math.isqrt(n)) + 1
     for i in range(11, limit):
         if is_prime[i]:
-            for j in range(i*i, n+1, i):
-                is_prime[j] = False
-    
-    return [i for i in range(2, n+1) if is_prime[i]]
+            step = i * i
+            while step <= n:
+                is_prime[step] = 0
+                step += i
 
-# ---- Main verification ----
-t0 = time.perf_counter()
-primes_std = sieve_standard(N)
-t1 = time.perf_counter()
-print(f"Standard Sieve:   {len(primes_std)} primes in {t1-t0:.6f}s")
+    return [i for i in range(2, n + 1) if is_prime[i]]
 
-t2 = time.perf_counter()
-primes_wheel = sieve_wheel(N)
-t3 = time.perf_counter()
-print(f"Wheel Sieve:      {len(primes_wheel)} primes in {t3-t2:.6f}s")
 
-# Verify both find exactly 9592 primes
-assert len(primes_std) == 9592, f"Standard sieve found {len(primes_std)} primes (expected 9592)"
-assert len(primes_wheel) == 9592, f"Wheel sieve found {len(primes_wheel)} primes (expected 9592)"
+N = 100_000
+EXPECTED_COUNT = 9592
 
-# Verify identical sets
-assert primes_std == primes_wheel, "Prime sets differ!"
+# --- Standard sieve timing ---
+start = time.perf_counter()
+primes_std = standard_sieve(N)
+t_std = time.perf_counter() - start
 
-print(f"Both sieves produce identical prime sets with {len(primes_std)} primes each.")
+# --- Wheel sieve timing ---
+start = time.perf_counter()
+primes_wheel = wheel_sieve(N)
+t_wheel = time.perf_counter() - start
+
+# --- Verification ---
+print(f"Standard Sieve:  {len(primes_std)} primes in {t_std:.6f}s")
+print(f"Wheel Sieve:     {len(primes_wheel)} primes in {t_wheel:.6f}s")
+print(f"Expected count:  {EXPECTED_COUNT}")
+
+assert len(primes_std) == EXPECTED_COUNT, "Standard sieve did not find the expected number of primes!"
+assert len(primes_wheel) == EXPECTED_COUNT, "Wheel sieve did not find the expected number of primes!"
+
+if set(primes_std) == set(primes_wheel):
+    print("✓ Both sieves produce identical prime sets.")
+else:
+    diff = sorted(set(primes_std).symmetric_difference(set(primes_wheel)))
+    print(f"✗ Mismatch! Difference: {diff}")
+
+if t_std < t_wheel:
+    print(f"→ Standard sieve is faster (by {t_wheel - t_std:.6f}s)")
+elif t_wheel < t_std:
+    print(f"→ Wheel sieve is faster (by {t_std - t_wheel:.6f}s)")
+else:
+    print("→ Both sieves took the same time.")
+
+print("\nDone!")

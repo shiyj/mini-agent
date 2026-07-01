@@ -1,45 +1,60 @@
-"""Core agent implementations.
+"""Agent implementations — ReAct architecture with two depths.
 
-Provides:
-- get_local_model()      – configure LiteLLMModel for local Ollama
-- write_file / run_python_file / execute_bash_command – agent tools
-- run_fast_agent()       – fast code generation (no execution)
-- run_deep_agent()       – self-correcting agent with execution feedback
+Architecture:
+  Both modes are ReAct (Reasoning + Acting) loops built on CodeAgent.
+  The difference is loop depth and tool access:
 
-Prompt templates are read from config/prompts.json, never hardcoded.
+  ┌─ Fast Agent (极速流) ─────────────────────────────┐
+  │  max_steps=1, no tools, temperature=0.0            │
+  │  Single reasoning pass → raw code. No acting.      │
+  │  Use: boilerplate, syntax conversion, one-shot gen │
+  └────────────────────────────────────────────────────┘
+
+  ┌─ Deep Agent (深思流) ──────────────────────────────┐
+  │  max_steps=8-15, 3 tools, temperature=0.4-0.5      │
+  │  Full loop: Reason → Act → Observe → Repeat        │
+  │  Use: complex scripts, debugging, iterative tasks   │
+  └────────────────────────────────────────────────────┘
+
+Users create the model externally (via LiteLLMModel or get_local_model)
+and pass it in — the agent code never touches model config.
 """
 
 import subprocess
 from smolagents import CodeAgent, LiteLLMModel, tool
 
-from .config import load_config, load_prompts, build_prompt, OllamaConfig
+from .config import load_prompts, build_prompt
 
 
 # ---------------------------------------------------------------------------
-# 1. Model factory
+# 1. Convenience model factory (optional — users can build models directly)
 # ---------------------------------------------------------------------------
 
 def get_local_model(
-    model_name: str | None = None,
+    model_name: str,
+    api_base: str = "http://localhost:11434",
     temperature: float = 0.2,
     ctx_size: int = 8192,
-    config: OllamaConfig | None = None,
 ) -> LiteLLMModel:
-    """Configure a LiteLLMModel that talks to a local Ollama instance."""
-    if config is None:
-        config = load_config()
-    if model_name is None:
-        model_name = config.get_default_model()
+    """Create a LiteLLMModel pointed at a local Ollama instance.
 
-    # Use the ollama_chat/ prefix for litellm's built-in Ollama provider.
-    # litellm appends /api/chat to the base URL, so strip /v1 if present.
-    base_url = config.base_url
-    if base_url.endswith("/v1"):
-        base_url = base_url[:-3]
+    Args:
+        model_name: Ollama model tag, e.g. "ornith:9b".
+        api_base: Ollama server URL.  If it ends with /v1 the suffix
+                  is stripped because litellm's ollama_chat provider
+                  appends /api/chat on its own.
+        temperature: Sampling temperature.
+        ctx_size: Context window in tokens.
 
+    Returns:
+        A configured LiteLLMModel.
+    """
+    base = api_base
+    if base.endswith("/v1"):
+        base = base[:-3]
     return LiteLLMModel(
         model_id=f"ollama_chat/{model_name}",
-        api_base=base_url,
+        api_base=base,
         temperature=temperature,
         num_ctx=ctx_size,
     )
@@ -128,53 +143,85 @@ def execute_bash_command(command: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3. Fast-track agent  (pure code generation, no execution)
+# 3. Fast agent — Code-only ReAct (single pass, no tools)
 # ---------------------------------------------------------------------------
 
 def run_fast_agent(
     prompt: str,
-    model_name: str | None = None,
-    temperature: float = 0.0,
-    max_steps: int = 2,
-    config: OllamaConfig | None = None,
+    model: LiteLLMModel,
+    max_steps: int = 1,
 ) -> str:
-    """Run the fast-track agent that generates code without executing it."""
-    model = get_local_model(
-        model_name=model_name, temperature=temperature,
-        ctx_size=8192, config=config,
-    )
+    """Fast-track ReAct: single reasoning pass, pure code output.
 
+    Args:
+        prompt: Task description.
+        model: Any smolagents-compatible model (LiteLLMModel, TransformersModel, …).
+        max_steps: Number of reasoning steps (keep at 1 for raw generation).
+
+    Returns:
+        The generated code / agent output.
+    """
     agent = CodeAgent(
         tools=[],
         model=model,
         max_steps=max_steps,
         additional_authorized_imports=["math", "json", "os", "sys"],
     )
-
     full_prompt = build_prompt("fast_agent", prompt=prompt)
     return agent.run(full_prompt)
 
 
 # ---------------------------------------------------------------------------
-# 4. Deep-thinking agent  (generate → execute → fix → repeat)
+# 4. Deep agent — Full ReAct loop with tools and iteration
 # ---------------------------------------------------------------------------
+
+def _capture_env_snapshot() -> str:
+    try:
+        snapshot_parts = []
+        cwd = subprocess.run(
+            "pwd", shell=True, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        snapshot_parts.append(f"cwd: {cwd}")
+
+        ls_out = subprocess.run(
+            "ls -1 2>/dev/null | head -40",
+            shell=True, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if ls_out:
+            snapshot_parts.append(f"files:\n{ls_out}")
+
+        pip_out = subprocess.run(
+            "pip list --format=columns 2>/dev/null | head -25",
+            shell=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if pip_out:
+            snapshot_parts.append(f"packages:\n{pip_out}")
+
+        return "\n".join(snapshot_parts)
+    except Exception:
+        return ""
+
 
 def run_deep_agent(
     prompt: str,
+    model: LiteLLMModel,
     target_file: str = "output.py",
-    model_name: str | None = None,
-    temperature: float = 0.5,
     max_steps: int = 8,
-    ctx_size: int = 16384,
-    config: OllamaConfig | None = None,
 ) -> str:
-    """Run the deep-thinking agent that writes code, executes it, reads
-    errors, and iteratively fixes them until the task is done."""
-    model = get_local_model(
-        model_name=model_name, temperature=temperature,
-        ctx_size=ctx_size, config=config,
-    )
+    """Deep ReAct: write → run → observe → fix → repeat.
 
+    Before the task begins the agent receives an environment snapshot
+    (cwd, files, installed packages) so it can make context-aware decisions.
+
+    Args:
+        prompt: Task description.
+        model: Any smolagents-compatible model.
+        target_file: File the agent should write its script to.
+        max_steps: Maximum ReAct iterations (8-15 recommended).
+
+    Returns:
+        The final agent output after all iterations.
+    """
     agent = CodeAgent(
         tools=[write_file, run_python_file, execute_bash_command],
         model=model,
@@ -188,18 +235,17 @@ def run_deep_agent(
     )
 
     prompts = load_prompts()
-    deep_cfg = prompts.get("deep_agent", {})
-    template = deep_cfg.get("user_template", "{prompt}")
+    section = prompts.get("deep_agent", {})
+    template = section.get("user_template", "{prompt}")
 
-    # Pre-substitute {target_file} into sub-fields that contain it
     formatted = {}
-    for key, value in deep_cfg.items():
+    for key, value in section.items():
         if key == "user_template":
             continue
         formatted[key] = value.replace("{target_file}", target_file)
 
-    # Build final context with all placeholders
     context = dict(formatted)
+    context["env_snapshot"] = _capture_env_snapshot()
     context["target_file"] = target_file
     context["prompt"] = prompt
     full_prompt = template.format(**context)
