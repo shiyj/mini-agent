@@ -1,29 +1,32 @@
-"""Agent implementations — ReAct architecture with two depths.
+"""Agent implementations — two depths: fast (direct generation) and deep (ReAct loop).
 
 Architecture:
-  Both modes are ReAct (Reasoning + Acting) loops built on CodeAgent.
-  The difference is loop depth and tool access:
+  ┌─ Fast Agent (极速流) ───────────────────────────────┐
+  │  Calls model.generate() directly, no agent scaffold. │
+  │  Uses only system_instruction from prompts.json.     │
+  │  Single pass, ~50 words system prompt.               │
+  │  Use: boilerplate, syntax conversion, one-shot gen   │
+  └──────────────────────────────────────────────────────┘
 
-  ┌─ Fast Agent (极速流) ─────────────────────────────┐
-  │  max_steps=1, no tools, temperature=0.0            │
-  │  Single reasoning pass → raw code. No acting.      │
-  │  Use: boilerplate, syntax conversion, one-shot gen │
-  └────────────────────────────────────────────────────┘
+  ┌─ Deep Agent (深思流) ────────────────────────────────┐
+  │  Full ReAct loop via CodeAgent with custom (concise) │
+  │  prompt_templates that replace the default 174-line  │
+  │  smolagents system prompt.                            │
+  │  max_steps=8-15, 3 tools, temp=0.4-0.5.             │
+  │  Use: complex scripts, debugging, iterative tasks    │
+  └──────────────────────────────────────────────────────┘
 
-  ┌─ Deep Agent (深思流) ──────────────────────────────┐
-  │  max_steps=8-15, 3 tools, temperature=0.4-0.5      │
-  │  Full loop: Reason → Act → Observe → Repeat        │
-  │  Use: complex scripts, debugging, iterative tasks   │
-  └────────────────────────────────────────────────────┘
-
-Users create the model externally (via LiteLLMModel or get_local_model)
-and pass it in — the agent code never touches model config.
+Users create the model externally and pass it in.
 """
 
 import subprocess
-from smolagents import CodeAgent, LiteLLMModel, tool
+from smolagents import (
+    CodeAgent, LiteLLMModel, tool,
+    PromptTemplates, PlanningPromptTemplate,
+    ManagedAgentPromptTemplate, FinalAnswerPromptTemplate,
+)
 
-from .config import load_prompts, build_prompt
+from .config import load_prompts
 
 
 # ---------------------------------------------------------------------------
@@ -143,32 +146,66 @@ def execute_bash_command(command: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3. Fast agent — Code-only ReAct (single pass, no tools)
+# 3. Custom prompt templates for deep agent
+#    (replaces smolagents default 174-line code_agent.yaml)
+# ---------------------------------------------------------------------------
+
+_DEEP_SYSTEM_PROMPT = """You are a coding agent.
+
+1. Write code with write_file() — save to the target file.
+2. Run it with run_python_file() — check the output.
+3. If there are errors, fix them and repeat.
+4. Once the script runs correctly, call final_answer().
+
+Output code in ```python ... ``` blocks."""
+
+_DEEP_FINAL_ANSWER = FinalAnswerPromptTemplate(
+    pre_messages="The agent got stuck. Based on the conversation below, provide a final answer.",
+    post_messages="Task: {task}\n\nProvide the best answer you can from the above.",
+)
+
+# Unused by our config (no planning_interval, no managed agents) — keep empty.
+_DEEP_PROMPT_TEMPLATES = PromptTemplates(
+    system_prompt=_DEEP_SYSTEM_PROMPT,
+    planning=PlanningPromptTemplate(initial_plan="", update_plan_pre_messages="", update_plan_post_messages=""),
+    managed_agent=ManagedAgentPromptTemplate(task="", report=""),
+    final_answer=_DEEP_FINAL_ANSWER,
+)
+
+
+# ---------------------------------------------------------------------------
+# 4. Fast agent — direct model call, no CodeAgent overhead
 # ---------------------------------------------------------------------------
 
 def run_fast_agent(
     prompt: str,
     model: LiteLLMModel,
-    max_steps: int = 1,
 ) -> str:
-    """Fast-track ReAct: single reasoning pass, pure code output.
+    """Single-pass code generation. No ReAct loop, no tool calling.
+
+    Uses only the ``system_instruction`` and ``user_template`` from
+    ``prompts.json`` section ``fast_agent`` — **not** the default 174-line
+    smolagents system prompt.
 
     Args:
         prompt: Task description.
-        model: Any smolagents-compatible model (LiteLLMModel, TransformersModel, …).
-        max_steps: Number of reasoning steps (keep at 1 for raw generation).
+        model: Any smolagents-compatible model.
 
     Returns:
-        The generated code / agent output.
+        The raw model output (code / text).
     """
-    agent = CodeAgent(
-        tools=[],
-        model=model,
-        max_steps=max_steps,
-        additional_authorized_imports=["math", "json", "os", "sys"],
+    prompts = load_prompts()
+    sec = prompts.get("fast_agent", {})
+    system_instruction = sec.get("system_instruction", "Output only code. No explanation.")
+
+    response = model.generate(
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": system_instruction}]},
+            {"role": "user", "content": [{"type": "text", "text": prompt}]},
+        ],
     )
-    full_prompt = build_prompt("fast_agent", prompt=prompt)
-    return agent.run(full_prompt)
+    content = response.content.strip() if response.content else ""
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +247,9 @@ def run_deep_agent(
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
 
-    Before the task begins the agent receives an environment snapshot
-    (cwd, files, installed packages) so it can make context-aware decisions.
+    Uses a custom system prompt (~6 lines) instead of smolagents' default
+    174-line template.  Before the task begins the agent receives an
+    environment snapshot (cwd, files, installed packages).
 
     Args:
         prompt: Task description.
@@ -232,6 +270,8 @@ def run_deep_agent(
         executor_kwargs={
             "additional_functions": {"open": open},
         },
+        prompt_templates=_DEEP_PROMPT_TEMPLATES,
+        code_block_tags="markdown",
     )
 
     prompts = load_prompts()

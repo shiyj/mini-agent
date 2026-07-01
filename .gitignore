@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 uv.lock
+logs/
+.omo/
+.DS_Store
