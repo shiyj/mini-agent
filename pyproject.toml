@@ -1,0 +1,15 @@
+[project]
+name = "mini-agent"
+version = "0.1.0"
+description = "Local lightweight programming agent based on smolagents"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "smolagents[litellm]>=1.26.0",
+]
+
+[project.scripts]
+mini-agent = "mini_agent.agent:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
