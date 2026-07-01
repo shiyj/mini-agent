@@ -40,7 +40,6 @@ def _model():
     if _MODEL is None:
         _MODEL = get_local_model(
             model_name="ornith:9b",
-            api_base="http://172.20.104.158:11434",
             temperature=0.0,
             ctx_size=4096,
         )
@@ -120,7 +119,7 @@ def step_deep_agent_loop_optimization() -> None:
         temp = min(0.45 + (attempt - 1) * 0.03, 0.7)
         model = get_local_model(
             model_name="ornith:9b",
-            api_base="http://172.20.104.158:11434",
+            api_base="http://127.0.0.1:11434",
             temperature=temp,
             ctx_size=16384,
         )

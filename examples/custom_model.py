@@ -11,7 +11,7 @@ from mini_agent import run_fast_agent
 # Build a model manually — here with higher temperature and larger context
 my_model = LiteLLMModel(
     model_id="ollama_chat/ornith:9b",
-    api_base="http://172.20.104.158:11434",
+    api_base="http://127.0.0.1:11434",
     temperature=0.8,
     num_ctx=32768,
 )

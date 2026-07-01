@@ -6,7 +6,6 @@ from mini_agent import get_local_model, run_fast_agent
 # 1. Create a model — explicitly configure model + server
 model = get_local_model(
     model_name="ornith:9b",
-    api_base="http://172.20.104.158:11434",
     temperature=0.0,
 )
 
