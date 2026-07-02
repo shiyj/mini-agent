@@ -21,86 +21,46 @@ Users create the model externally and pass it in.
 
 import subprocess
 from smolagents import (
-    CodeAgent, LiteLLMModel, tool,
+    CodeAgent, tool,
     PromptTemplates, PlanningPromptTemplate,
     ManagedAgentPromptTemplate, FinalAnswerPromptTemplate,
 )
 
 from .config import load_prompts
+from .model import OllamaResponsesModel
 
 
 # ---------------------------------------------------------------------------
 # 1. Convenience model factory (optional — users can build models directly)
 # ---------------------------------------------------------------------------
 
-# Models already pre-registered in litellm.model_cost (avoids repeat work).
-_registered_ollama_models: set[str] = set()
-
-
-def _preregister_ollama_model(model_name: str, ctx_size: int = 8192) -> None:
-    """Pre-register an Ollama model in litellm.model_cost.
-
-    litellm's Ollama adapter calls ``POST /api/show`` on every new process
-    to fetch model metadata (context length, tool support, cost).  This
-    takes ~4 seconds and is completely unnecessary for local models.
-
-    By inserting a static entry into ``litellm.model_cost`` beforehand,
-    ``_is_static_ollama_model()`` returns True and the HTTP call is
-    skipped entirely.
-
-    Args:
-        model_name: Ollama tag without provider prefix, e.g. "ornith:9b".
-        ctx_size: Context window size in tokens.
-    """
-    key = f"ollama_chat/{model_name}"
-    if key in _registered_ollama_models:
-        return
-
-    import litellm
-
-    litellm.model_cost[key] = {
-        "key": key,
-        "litellm_provider": "ollama",
-        "mode": "chat",
-        "supports_function_calling": True,
-        "input_cost_per_token": 0.0,
-        "output_cost_per_token": 0.0,
-        "max_tokens": ctx_size,
-        "max_input_tokens": ctx_size,
-        "max_output_tokens": ctx_size,
-    }
-    _registered_ollama_models.add(key)
-
-
 def get_local_model(
     model_name: str,
     api_base: str = "http://localhost:11434",
-    temperature: float = 0.2,
-    ctx_size: int = 8192,
-) -> LiteLLMModel:
-    """Create a LiteLLMModel pointed at a local Ollama instance.
+    temperature: float = 0.0,
+    max_output_tokens: int = 512,
+) -> OllamaResponsesModel:
+    """Create a model that talks to Ollama's ``/v1/responses`` endpoint.
+
+    No litellm dependency — uses ``httpx`` directly.  The Responses API
+    handles thinking/content separation natively, and the model's output
+    text is extracted from ``output_text`` items in the response.
 
     Args:
-        model_name: Ollama model tag, e.g. "ornith:9b".
-        api_base: Ollama server URL.  If it ends with /v1 the suffix
-                  is stripped because litellm's ollama_chat provider
-                  appends /api/chat on its own.
+        model_name: Ollama model tag, e.g. ``"ornith:9b"``.
+        api_base: Ollama server URL.
         temperature: Sampling temperature.
-        ctx_size: Context window in tokens.
+        max_output_tokens: Maximum tokens the model may generate.
+            Prevents runaway thinking.
 
     Returns:
-        A configured LiteLLMModel.
+        A configured ``OllamaResponsesModel``.
     """
-    _preregister_ollama_model(model_name, ctx_size)
-
-    base = api_base
-    if base.endswith("/v1"):
-        base = base[:-3]
-    return LiteLLMModel(
-        model_id=f"ollama_chat/{model_name}",
-        api_base=base,
+    return OllamaResponsesModel(
+        model_name=model_name,
+        api_base=api_base,
         temperature=temperature,
-        num_ctx=ctx_size,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -220,7 +180,7 @@ _DEEP_PROMPT_TEMPLATES = PromptTemplates(
 
 def run_fast_agent(
     prompt: str,
-    model: LiteLLMModel,
+    model: OllamaResponsesModel,
     prefill: bool | None = None,
 ) -> str:
     """Single-pass code generation. No ReAct loop, no tool calling.
@@ -298,7 +258,7 @@ def _capture_env_snapshot() -> str:
 
 def run_deep_agent(
     prompt: str,
-    model: LiteLLMModel,
+    model: OllamaResponsesModel,
     target_file: str = "output.py",
     max_steps: int = 8,
 ) -> str:
