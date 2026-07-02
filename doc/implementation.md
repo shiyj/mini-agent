@@ -94,6 +94,176 @@ Deep Agent (深思流):
 
 ---
 
+## Prefill 机制（极速流）
+
+### 问题
+
+ornith:9b（基于 Qwen）等模型有 Ollama 原生的「思考模式」。
+收到代码生成请求时，模型会把推理过程写入 `message.thinking` 字段，
+在 `message.content` 中输出最终代码。但如果任务稍复杂（如 "Fibonacci one-liner"），
+模型会在 thinking 中反复试错多个方案，消耗 2000-4000 token 仍未输出 content。
+
+实测数据（同一 prompt, temperature=0.0, num_predict=400）：
+
+| 任务 | thinking 长度 | content | eval_tokens | 耗时 |
+|------|--------------|---------|-------------|------|
+| sum 1 to 100 | 258B | ✅ 100B | 128 | 5.9s |
+| Fibonacci one-liner | 1138B | ❌ 0B | 400（截断） | 10.7s |
+| Fibonacci one-liner (无限制) | 13326B | ❌ 0B | 4058 | 79s |
+
+### 根因
+
+模型在 thinking 中写了 4 个不同方案，每个都自我否定：
+```
+让我想个 one-liner...
+方案A → 太复杂了
+等等，换方案B → __setitem__ 返回 None，不行
+再试 lambda → 不对
+用 walrus operator → （被 token 限制截断）
+```
+token 用完后 content 仍为空。
+
+### 尝试过的方案
+
+测试了 7 种 system prompt 策略，全部无效：
+- "Do NOT include any explanation, or `<thinking>` blocks"
+- "Output the FIRST solution that comes to mind. Do not try multiple approaches."
+- "You are a confident programmer. Never second-guess or revise."
+- "Answer immediately with code. Do not plan, reason, or evaluate alternatives."
+- "Code only. First thought, first output."
+- "You are a senior developer who writes code from memory without deliberation."
+- "This is a trivial task. Do not overthink."
+
+原因：Ollama 的 thinking 字段是模型架构层面的行为，不受 system prompt 控制。
+
+### 解决方案：Assistant Prefill
+
+在消息列表末尾追加一条 assistant 消息，预填代码块开头：
+
+```python
+messages = [
+    {"role": "system", "content": "Output only Python code."},
+    {"role": "user", "content": "Write a Python one-liner..."},
+    {"role": "assistant", "content": "```python\n"},  # ← prefill
+]
+```
+
+模型看到自己「已经开始写代码」，直接续写 content，完全跳过 thinking 阶段。
+
+**原理**：Ollama 的 Qwen 模型在收到 assistant 消息已有内容时，认为思考阶段已结束，
+直接进入 content 生成。这相当于强制模型「从代码块中间开始续写」。
+
+### 性能对比
+
+7 个任务的完整测试结果：
+
+| 任务 | 无 prefill | 有 prefill |
+|------|-----------|-----------|
+| Fibonacci one-liner | ❌ 10.3s / 500t | ✅ 1.3s / 48t |
+| Palindrome 函数 | ✅ 2.1s / 89t | ✅ 1.7s / 69t |
+| CSV 读取脚本 | ✅ 8.0s / 385t | ✅ 2.1s / 90t |
+| 反转链表 | ✅ 8.6s / 414t | ✅ 7.1s / 338t |
+| 下载网页提取链接 | ✅ 9.1s / 435t | ✅ 3.0s / 134t |
+| 合并有序链表 | ✅ 6.3s / 297t | ✅ 5.3s / 250t |
+| sum 1 to 100 | ✅ 1.9s / 81t | ✅ 0.8s / 20t |
+
+Prefill 在所有任务上都成功，且 token 数减少 50-90%，耗时显著降低。
+
+### 配置方式
+
+`config/prompts.json` 中 `fast_agent` 段新增两个配置项：
+
+```json
+{
+  "fast_agent": {
+    "system_instruction": "...",
+    "prefill": true,
+    "prefill_text": "```python\n"
+  }
+}
+```
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `prefill` | bool | `true` | 是否启用 assistant prefill |
+| `prefill_text` | string | `` ```python\n `` | 预填到 assistant 消息的文本 |
+
+也可在调用时通过参数覆盖：`run_fast_agent(prompt, model, prefill=False)`。
+
+### Prefill 机制（Fast Agent）
+
+#### 问题
+
+ornith:9b（Qwen 系）有 Ollama thinking 模式。模型把推理放在 `message.thinking` 字段，
+`message.content` 为空。实测 7 种不同 system prompt（禁止试错、自信模式、直觉回答等）
+**全部无效**——thinking 行为是架构层面的，不受 prompt 控制。
+
+模型在 thinking 中的典型行为：
+
+```
+让我想个 one-liner...
+```python
+print(*(a:=[] or [0,1], ...))   # 太复杂了
+```
+等等，换一个...
+```python
+a=[0,1]; print(*(...))           # __setitem__ 返回 None，不行
+```
+让我再试 lambda...                # 300 token 用完，content 始终为空
+```
+
+#### 解决方案
+
+在 messages 末尾追加 assistant 消息，预填代码块开头：
+
+```python
+messages = [
+    {"role": "system", "content": "Output only Python code."},
+    {"role": "user", "content": task},
+    {"role": "assistant", "content": "```python\n"},   # ← prefill
+]
+```
+
+模型收到自己已开始写代码块的信号，直接续写，完全跳过 thinking 阶段。
+返回结果时补回 `prefill_text` 前缀，得到完整代码块。
+
+#### 配置
+
+`config/prompts.json` 的 `fast_agent` section：
+
+```json
+{
+  "fast_agent": {
+    "system_instruction": "...",
+    "prefill": true,
+    "prefill_text": "```python\n"
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `prefill` | `true` | 是否启用 assistant prefill |
+| `prefill_text` | `` `` ```python\n `` `` | 预填到 assistant 消息的文本 |
+
+也可在调用时覆盖：`run_fast_agent(prompt, model, prefill=False)`。
+
+#### 性能对比
+
+| 任务 | 无 prefill | 有 prefill |
+|------|-----------|-----------|
+| Fibonacci one-liner | ❌ 10.3s / 500 tokens（空 content） | ✅ 1.3s / 48 tokens |
+| Palindrome 检查 | ✅ 2.1s / 89 tokens | ✅ 1.7s / 69 tokens |
+| CSV 读取脚本 | ✅ 8.0s / 385 tokens | ✅ 2.1s / 90 tokens |
+| 下载网页提取链接 | ✅ 9.1s / 435 tokens | ✅ 3.0s / 134 tokens |
+| 反转链表 | ✅ 8.6s / 414 tokens | ✅ 7.1s / 338 tokens |
+| 合并有序链表 | ✅ 6.3s / 297 tokens | ✅ 5.3s / 250 tokens |
+| sum 1 to 100 | ✅ 1.9s / 81 tokens | ✅ 0.8s / 20 tokens |
+
+7/7 任务成功（无 prefill 时 Fibonacci 失败），平均 token 数减少 57%。
+
+---
+
 ## 验证流程
 
 验证脚本位于 `verify/verify.py`，执行三步检查：

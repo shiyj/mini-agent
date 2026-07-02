@@ -33,6 +33,45 @@ from .config import load_prompts
 # 1. Convenience model factory (optional — users can build models directly)
 # ---------------------------------------------------------------------------
 
+# Models already pre-registered in litellm.model_cost (avoids repeat work).
+_registered_ollama_models: set[str] = set()
+
+
+def _preregister_ollama_model(model_name: str, ctx_size: int = 8192) -> None:
+    """Pre-register an Ollama model in litellm.model_cost.
+
+    litellm's Ollama adapter calls ``POST /api/show`` on every new process
+    to fetch model metadata (context length, tool support, cost).  This
+    takes ~4 seconds and is completely unnecessary for local models.
+
+    By inserting a static entry into ``litellm.model_cost`` beforehand,
+    ``_is_static_ollama_model()`` returns True and the HTTP call is
+    skipped entirely.
+
+    Args:
+        model_name: Ollama tag without provider prefix, e.g. "ornith:9b".
+        ctx_size: Context window size in tokens.
+    """
+    key = f"ollama_chat/{model_name}"
+    if key in _registered_ollama_models:
+        return
+
+    import litellm
+
+    litellm.model_cost[key] = {
+        "key": key,
+        "litellm_provider": "ollama",
+        "mode": "chat",
+        "supports_function_calling": True,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_tokens": ctx_size,
+        "max_input_tokens": ctx_size,
+        "max_output_tokens": ctx_size,
+    }
+    _registered_ollama_models.add(key)
+
+
 def get_local_model(
     model_name: str,
     api_base: str = "http://localhost:11434",
@@ -52,6 +91,8 @@ def get_local_model(
     Returns:
         A configured LiteLLMModel.
     """
+    _preregister_ollama_model(model_name, ctx_size)
+
     base = api_base
     if base.endswith("/v1"):
         base = base[:-3]
@@ -180,16 +221,18 @@ _DEEP_PROMPT_TEMPLATES = PromptTemplates(
 def run_fast_agent(
     prompt: str,
     model: LiteLLMModel,
+    prefill: bool | None = None,
 ) -> str:
     """Single-pass code generation. No ReAct loop, no tool calling.
-
-    Uses only the ``system_instruction`` and ``user_template`` from
-    ``prompts.json`` section ``fast_agent`` — **not** the default 174-line
-    smolagents system prompt.
 
     Args:
         prompt: Task description.
         model: Any smolagents-compatible model.
+        prefill: Whether to use assistant-prefill to bypass thinking mode.
+            When True, appends ``{"role": "assistant", "content": "```python\\n"}``
+            to the messages, forcing the model to continue from inside a code
+            block.  Defaults to the ``prefill`` key in ``prompts.json``
+            (``fast_agent`` section); falls back to True if unset.
 
     Returns:
         The raw model output (code / text).
@@ -198,13 +241,27 @@ def run_fast_agent(
     sec = prompts.get("fast_agent", {})
     system_instruction = sec.get("system_instruction", "Output only code. No explanation.")
 
-    response = model.generate(
-        messages=[
-            {"role": "system", "content": [{"type": "text", "text": system_instruction}]},
-            {"role": "user", "content": [{"type": "text", "text": prompt}]},
-        ],
-    )
+    if prefill is None:
+        prefill = sec.get("prefill", True)
+
+    prefill_text = sec.get("prefill_text", "```python\n")
+
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": system_instruction}]},
+        {"role": "user", "content": [{"type": "text", "text": prompt}]},
+    ]
+
+    if prefill:
+        messages.append(
+            {"role": "assistant", "content": [{"type": "text", "text": prefill_text}]},
+        )
+
+    response = model.generate(messages=messages)
     content = response.content.strip() if response.content else ""
+
+    if prefill and content:
+        content = prefill_text + content
+
     return content
 
 

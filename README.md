@@ -52,7 +52,25 @@ result = run_fast_agent("Write a function to compute Fibonacci numbers", model=m
 print(result)
 ```
 
-温度建议 `0.0`，`max_steps=1`，无外部工具，纯 ReAct 单步推理。
+温度建议 `0.0`，无外部工具，纯单步生成。
+
+#### Prefill 模式（默认开启）
+
+Qwen 系列（如 ornith:9b）有「思考模式」：模型会在 `thinking` 字段中反复试错，
+消耗数千 token 后才输出 `content`，甚至完全不输出。
+
+`run_fast_agent` 默认启用 **assistant prefill**：在消息末尾追加一条
+`{"role": "assistant", "content": "```python\n"}`，模型认为代码块已开始，
+直接续写代码，跳过思考阶段。
+
+| | 无 prefill | 有 prefill（默认） |
+|---|---|---|
+| 成功率 | 6/7（Fibonacci 等任务失败） | 7/7 |
+| Fibonacci 耗时 | ❌ 10-80s / 500-4000 tokens（空输出） | ✅ 1-2s / 48 tokens |
+| 平均 token 数 | ~315 | ~136 |
+
+关闭 prefill：`run_fast_agent(prompt, model, prefill=False)`，
+或修改 `config/prompts.json` 中 `"prefill": false`。
 
 ### 深思流 — 自动纠错循环
 

@@ -1,7 +1,9 @@
 {
   "fast_agent": {
     "system_instruction": "You are a fast code generator. Output only executable Python code or core logic. Do NOT include any explanation, greetings, or <thinking> blocks.",
-    "user_template": "{system_instruction}\n\nTask: {prompt}"
+    "user_template": "{system_instruction}\n\nTask: {prompt}",
+    "prefill": true,
+    "prefill_text": "```python\n"
   },
   "deep_agent": {
     "system_prompt": "You are a robust automated programming agent.\nWrite code to `{target_file}`, run it, read errors, fix them.",
