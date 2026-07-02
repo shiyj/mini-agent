@@ -1,12 +1,13 @@
 """Custom smolagents Model that calls Ollama's /v1/responses endpoint via httpx.
 
 Eliminates the 5.5 s import overhead of litellm by using a bare HTTP client.
+Uses SSE streaming so the first token arrives in ~0.3 s.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 from smolagents.models import (
@@ -39,12 +40,30 @@ def _flatten_content(msg: dict[str, Any]) -> str:
     return ""
 
 
+def _parse_sse(line: str) -> tuple[str, str] | None:
+    """Parse a single SSE line into (event_type, data) or None.
+
+    Handles ``event:`` and ``data:`` lines.  Returns ``None`` for
+    blank lines and unknown prefixes.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    if line.startswith("event: "):
+        return ("event", line[7:])
+    if line.startswith("data: "):
+        return ("data", line[6:])
+    return None
+
+
 class OllamaResponsesModel(Model):
     """smolagents Model that calls Ollama's ``/v1/responses`` endpoint.
 
     No litellm dependency — uses ``httpx`` directly.  Supports the full
     smolagents ``Model`` interface so it works with both
     ``run_fast_agent`` and ``CodeAgent`` (deep agent).
+
+    Uses SSE streaming internally so the first token arrives quickly.
 
     Parameters:
         model_name:
@@ -110,6 +129,7 @@ class OllamaResponsesModel(Model):
             "input": input_items,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
+            "stream": True,
         }
         if instructions:
             body["instructions"] = instructions
@@ -127,27 +147,38 @@ class OllamaResponsesModel(Model):
         # 6. Merge extra kwargs (e.g. num_ctx, reasoning effort)
         body.update(kwargs)
 
-        # 7. Send request
-        raw = self._post(body)
+        # 7. Stream SSE events and collect output
+        output_text = ""
+        usage_data: dict[str, Any] = {}
+        for event_type, data in self._iter_sse(body):
+            if event_type == "response.output_text.delta":
+                delta = data.get("delta", "")
+                if isinstance(delta, str):
+                    output_text += delta
+            elif event_type == "response.completed":
+                # The completed event carries the full response with usage
+                resp_data = data.get("response") or data
+                usage_data = resp_data.get("usage", {})
+                # Also collect any output_text from the completed response
+                if not output_text:
+                    output_text = self._extract_output_text(resp_data)
 
-        # 8. Parse output
-        output_text = self._extract_output_text(raw)
+        # 8. Apply stop sequences
         if stop_sequences and output_text:
             output_text = remove_content_after_stop_sequences(
                 output_text, stop_sequences
             )
 
-        # 9. Extract token usage
-        usage = raw.get("usage") or {}
+        # 9. Token usage
         token_usage = TokenUsage(
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
+            input_tokens=usage_data.get("input_tokens", 0),
+            output_tokens=usage_data.get("output_tokens", 0),
         )
 
         return ChatMessage(
             role=MessageRole.ASSISTANT,
             content=output_text or "",
-            raw=raw,
+            raw=usage_data,
             token_usage=token_usage,
         )
 
@@ -155,12 +186,29 @@ class OllamaResponsesModel(Model):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _post(self, body: dict[str, Any]) -> dict[str, Any]:
-        """POST to ``/v1/responses`` and return the parsed JSON."""
+    def _iter_sse(
+        self, body: dict[str, Any]
+    ) -> Iterator[tuple[str, Any]]:
+        """POST to ``/v1/responses`` with ``stream: true`` and yield
+        ``(event_type, parsed_data)`` tuples from the SSE stream."""
         url = f"{self.api_base}/v1/responses"
-        resp = self._client.post(url, json=body)
-        resp.raise_for_status()
-        return resp.json()
+        with self._client.stream("POST", url, json=body) as resp:
+            resp.raise_for_status()
+            current_event = ""
+            for raw_line in resp.iter_lines():
+                parsed = _parse_sse(raw_line)
+                if parsed is None:
+                    continue
+                kind, value = parsed
+                if kind == "event":
+                    current_event = value
+                elif kind == "data" and current_event:
+                    try:
+                        data = json.loads(value)
+                    except json.JSONDecodeError:
+                        data = value
+                    yield (current_event, data)
+                    current_event = ""
 
     @staticmethod
     def _extract_output_text(raw: dict[str, Any]) -> str:
