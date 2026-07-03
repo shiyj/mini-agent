@@ -15,6 +15,7 @@ from .agent import (
 )
 from .config import load_prompts, build_prompt
 from .model import OllamaResponsesModel
+from . import sandbox_patch
 
 __all__ = [
     "get_local_model",
@@ -26,4 +27,5 @@ __all__ = [
     "run_deep_agent",
     "load_prompts",
     "build_prompt",
+    "sandbox_patch",
 ]
