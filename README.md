@@ -38,7 +38,7 @@ model = get_local_model(
 )
 ```
 
-`OllamaResponsesModel` 也可直接构造，参见 [custom_model.py](examples/custom_model.py)。
+`ResponsesModel` 也可直接构造，参见 [custom_model.py](examples/custom_model.py)。
 
 ### 1. 🏎️ 极速流 — 单次代码生成
 
@@ -115,14 +115,14 @@ mini_agent/
 ├── examples/
 │   ├── basic_usage.py           # 最简使用示例
 │   ├── fast_vs_deep.py          # 极速 vs 深思 对比
-│   └── custom_model.py          # 手动构造 OllamaResponsesModel
+│   └── custom_model.py          # 手动构造 ResponsesModel
 ├── src/
 │   └── mini_agent/
 │       ├── __init__.py          # 公共 API 导出
 │       ├── agent.py             # 两种 Agent 模式 + 工具函数
 │       ├── code_executor.py     # exec() 代码执行引擎（替代 smolagents 沙盒）
 │       ├── config.py            # config/prompts.json 加载器
-│       ├── model.py             # OllamaResponsesModel（httpx + SSE）
+│       ├── model.py             # ResponsesModel（httpx + SSE）
 │       ├── prompts.py           # 小模型优化系统提示词
 │       ├── react_agent.py       # ReAct 循环核心
 │       ├── tools.py             # Tool 抽象 + @tool 装饰器

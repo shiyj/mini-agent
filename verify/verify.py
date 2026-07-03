@@ -3,7 +3,7 @@
 
 Tests:
 1. Prompt loading from config/prompts.json
-2. Model connectivity via OllamaResponsesModel (simple completion)
+2. Model connectivity via ResponsesModel (simple completion)
 3. Deep agent on a loop-optimisation task (with retry)
 """
 

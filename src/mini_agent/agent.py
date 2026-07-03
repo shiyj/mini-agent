@@ -21,7 +21,7 @@ Users create the model externally and pass it in.
 import subprocess
 
 from .config import load_prompts
-from .model import OllamaResponsesModel
+from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM
 from .react_agent import react_loop
 from .tools import Tool, tool
@@ -42,21 +42,21 @@ def get_local_model(
     api_base: str = "http://localhost:11434",
     temperature: float = 0.0,
     max_output_tokens: int = 512,
-) -> OllamaResponsesModel:
-    """Create a model that talks to Ollama's ``/v1/responses`` endpoint.
+) -> ResponsesModel:
+    """Create a model that talks to a ``/v1/responses`` endpoint.
 
     No smolagents dependency — uses ``httpx`` directly.
 
     Args:
-        model_name: Ollama model tag, e.g. ``"ornith:9b"``.
-        api_base: Ollama server URL.
+        model_name: Model tag, e.g. ``"ornith:9b"``.
+        api_base: Server base URL.
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate.
 
     Returns:
-        A configured ``OllamaResponsesModel``.
+        A configured ``ResponsesModel``.
     """
-    return OllamaResponsesModel(
+    return ResponsesModel(
         model_name=model_name,
         api_base=api_base,
         temperature=temperature,
@@ -152,14 +152,14 @@ def execute_bash_command(command: str) -> str:
 
 def run_fast_agent(
     prompt: str,
-    model: OllamaResponsesModel,
+    model: ResponsesModel,
     prefill: bool | None = None,
 ) -> str:
     """Single-pass code generation. No ReAct loop, no tool calling.
 
     Args:
         prompt: Task description.
-        model: An OllamaResponsesModel instance.
+        model: A ``ResponsesModel`` instance.
         prefill: Whether to use assistant-prefill to bypass thinking mode.
             When True, appends ``{"role": "assistant", "content": "```python\\n"}``
             to the messages, forcing the model to continue from inside a code
@@ -203,7 +203,7 @@ def run_fast_agent(
 
 def run_deep_agent(
     prompt: str,
-    model: OllamaResponsesModel,
+    model: ResponsesModel,
     target_file: str = "output.py",
     max_steps: int = 8,
 ) -> str:
@@ -214,7 +214,7 @@ def run_deep_agent(
 
     Args:
         prompt: Task description.
-        model: An OllamaResponsesModel instance.
+        model: A ``ResponsesModel`` instance.
         target_file: File the agent should write its script to.
         max_steps: Maximum ReAct iterations (8-15 recommended).
 

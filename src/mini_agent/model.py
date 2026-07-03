@@ -1,7 +1,7 @@
-"""Custom Model that calls Ollama's /v1/responses endpoint via httpx.
+"""Custom Model that calls a ``/v1/responses`` endpoint via httpx.
 
 No smolagents dependency — uses local types only.
-Uses SSE streaming so the first token arrives in ~0.3 s.
+Supports both SSE streaming and non-streaming (bulk) modes.
 """
 
 from __future__ import annotations
@@ -50,16 +50,19 @@ def _parse_sse(line: str) -> tuple[str, str] | None:
     return None
 
 
-class OllamaResponsesModel:
-    """Model that calls Ollama's ``/v1/responses`` endpoint via httpx.
+class ResponsesModel:
+    """Model that calls a ``/v1/responses`` compatible endpoint via httpx.
 
-    No smolagents dependency. Uses SSE streaming internally.
+    No smolagents dependency. Provider-agnostic — works with any server
+    that implements the OpenAI Responses API schema (Ollama, custom proxies, etc.).
 
     Parameters:
-        model_name: Ollama model tag, e.g. ``"ornith:9b"``.
-        api_base: Ollama server URL (default ``http://localhost:11434``).
+        model_name: Model tag, e.g. ``"ornith:9b"``.
+        api_base: Server base URL (default ``http://localhost:11434``).
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate (default 512).
+        stream: If True (default), use SSE streaming. If False, use a single POST
+            request — useful for debugging or when streaming is not needed.
     """
 
     def __init__(
@@ -68,6 +71,7 @@ class OllamaResponsesModel:
         api_base: str = "http://localhost:11434",
         temperature: float = 0.0,
         max_output_tokens: int = 512,
+        stream: bool = True,
         **kwargs,
     ):
         self.model_name = model_name
@@ -75,6 +79,7 @@ class OllamaResponsesModel:
         self.api_base = api_base.rstrip("/")
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
+        self.stream = stream
         self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
 
     # ------------------------------------------------------------------
@@ -124,7 +129,7 @@ class OllamaResponsesModel:
             "input": input_items,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
-            "stream": True,
+            "stream": self.stream,
         }
         if instructions:
             body["instructions"] = instructions
@@ -136,19 +141,11 @@ class OllamaResponsesModel:
         # 5. Merge extra kwargs
         body.update(kwargs)
 
-        # 6. Stream SSE events and collect output
-        output_text = ""
-        usage_data: dict[str, Any] = {}
-        for event_type, data in self._iter_sse(body):
-            if event_type == "response.output_text.delta":
-                delta = data.get("delta", "")
-                if isinstance(delta, str):
-                    output_text += delta
-            elif event_type == "response.completed":
-                resp_data = data.get("response") or data
-                usage_data = resp_data.get("usage", {})
-                if not output_text:
-                    output_text = self._extract_output_text(resp_data)
+        # 6. Send request — streaming or bulk
+        if self.stream:
+            output_text, usage_data = self._send_streaming(body)
+        else:
+            output_text, usage_data = self._send_bulk(body)
 
         # 7. Apply stop sequences
         if stop_sequences and output_text:
@@ -172,6 +169,38 @@ class OllamaResponsesModel:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _send_streaming(
+        self, body: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """Send a streaming request and collect output via SSE events."""
+        output_text = ""
+        usage_data: dict[str, Any] = {}
+        for event_type, data in self._iter_sse(body):
+            if event_type == "response.output_text.delta":
+                delta = data.get("delta", "")
+                if isinstance(delta, str):
+                    output_text += delta
+            elif event_type == "response.completed":
+                resp_data = data.get("response") or data
+                usage_data = resp_data.get("usage", {})
+                if not output_text:
+                    output_text = self._extract_output_text(resp_data)
+        return output_text, usage_data
+
+    def _send_bulk(
+        self, body: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:
+        """Send a non-streaming request and extract output from the JSON response."""
+        url = f"{self.api_base}/v1/responses"
+        # Ensure stream is False for the actual request
+        body["stream"] = False
+        resp = self._client.post(url, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        output_text = self._extract_output_text(data)
+        usage_data = data.get("usage", {})
+        return output_text, usage_data
 
     def _iter_sse(
         self, body: dict[str, Any]

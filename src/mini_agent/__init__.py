@@ -16,13 +16,13 @@ from .agent import (
     run_deep_agent,
 )
 from .config import load_prompts, build_prompt
-from .model import OllamaResponsesModel
+from .model import ResponsesModel
 from .tools import Tool, tool
 from .types import ChatMessage, MessageRole, TokenUsage
 
 __all__ = [
     "get_local_model",
-    "OllamaResponsesModel",
+    "ResponsesModel",
     "write_file",
     "run_python_file",
     "execute_bash_command",

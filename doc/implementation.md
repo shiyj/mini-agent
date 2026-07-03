@@ -2,8 +2,8 @@
 
 ## 概述
 
-mini-agent 是一个零外部 Agent 依赖的轻量级编程 Agent，通过 `OllamaResponsesModel`
-（基于 httpx 调用 Ollama Responses API）对接本地 Ollama 模型（如 ornith:9b），
+mini-agent 是一个零外部 Agent 依赖的轻量级编程 Agent，通过 `ResponsesModel`
+（基于 httpx 调用 /v1/responses API）对接本地模型（如 Ollama 上的 ornith:9b），
 提供**极速流**和**深思流**两种模式。
 
 核心决策：**用 ~400 行自实现代码替代 smolagents 的 3000+ 行。**
@@ -22,7 +22,7 @@ src/mini_agent/
 ├── agent.py             # get_local_model + 3 个工具 + run_fast_agent + run_deep_agent
 ├── code_executor.py     # exec()-based 代码执行引擎（替代 1768 行 LocalPythonExecutor）
 ├── config.py            # config/prompts.json 加载器
-├── model.py             # OllamaResponsesModel（httpx + SSE 流式）
+├── model.py             # ResponsesModel（httpx + SSE 流式）
 ├── prompts.py           # 小模型优化系统提示词（极速 12 词，深思 ~30 行）
 ├── react_agent.py       # ReAct 循环核心（替代 800 行 CodeAgent）
 ├── tools.py             # Tool 抽象 + @tool 装饰器
@@ -138,14 +138,15 @@ print(output)
 final_answer(output)
 ```
 
-### `model.py` — OllamaResponsesModel
+### `model.py` — ResponsesModel
 
-使用 `httpx` 直接调用 Ollama 的 `/v1/responses` 端点。
+使用 `httpx` 直接调用 `/v1/responses` 端点。
 
 **关键特征：**
 
-- **SSE 流式传输**：首 Token 到达约 0.3s
-- **Responses API 格式**：使用 `instructions`（系统消息）+ `input`（对话历史）+ `stream: true`
+- **SSE 流式传输**：首 Token 到达约 0.3s（默认启用）
+- **非流式模式**：`stream=False` 时使用单次 POST 请求，方便调试与离线分析
+- **Responses API 格式**：使用 `instructions`（系统消息）+ `input`（对话历史）+ `stream`
 - **停止序列**：在输出上应用 `remove_content_after_stop_sequences`
 - **无 smolagents 继承**：`generate(messages, stop_sequences, ...)` 是独立的公共方法
 
@@ -158,7 +159,7 @@ response.completed         → 提取 usage 数据，回退从 response.output �
 
 ### `agent.py` — Agent 实现
 
-**模型工厂：** `get_local_model()` 是可选便利函数，用户可直接构造 `OllamaResponsesModel`。
+**模型工厂：** `get_local_model()` 是可选便利函数，用户可直接构造 `ResponsesModel`。
 
 **三个工具函数：**
 
@@ -279,7 +280,7 @@ uv run python3 verify/verify.py
 |------|------|
 | `basic_usage.py` | 创建模型 → 运行 fast agent，最简流程 |
 | `fast_vs_deep.py` | 同一任务分别在两种模式下执行，观察行为差异 |
-| `custom_model.py` | 跳过 `get_local_model`，直接构造 `OllamaResponsesModel` |
+| `custom_model.py` | 跳过 `get_local_model`，直接构造 `ResponsesModel` |
 
 ---
 

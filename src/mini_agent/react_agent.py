@@ -29,7 +29,7 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from .model import OllamaResponsesModel
+    from .model import ResponsesModel
 
 
 def parse_code(text: str) -> str | None:
@@ -72,7 +72,7 @@ def parse_code(text: str) -> str | None:
 
 def react_loop(
     task: str,
-    model: "OllamaResponsesModel",
+    model: "ResponsesModel",
     tools: list[Tool],
     max_steps: int = 8,
     verbose: bool = True,
@@ -81,7 +81,7 @@ def react_loop(
 
     Args:
         task: The task description.
-        model: An OllamaResponsesModel instance.
+        model: A ``ResponsesModel`` instance.
         tools: List of Tool objects available to the agent.
         max_steps: Maximum number of Thought/Code/Observation cycles.
         verbose: If True, print step progress to stderr.

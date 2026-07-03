@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Pass a custom model (not from get_local_model) to the agent.
 
-Useful when you want to configure OllamaResponsesModel with non-default
+Useful when you want to configure ResponsesModel with non-default
 parameters (e.g. different api_base, custom temperature, etc.).
 """
 
-from mini_agent import OllamaResponsesModel, run_fast_agent
+from mini_agent import ResponsesModel, run_fast_agent
 
 # Build a model manually — here with higher temperature and larger context
-my_model = OllamaResponsesModel(
+my_model = ResponsesModel(
     model_name="ornith:9b",
     api_base="http://127.0.0.1:11434",
     temperature=0.8,

@@ -181,7 +181,7 @@ Ollama 的 Qwen 模型在收到 assistant 角色已有内容时，认为思考�
 - **新增模式：** 在 `agent.py` 中添加新函数，组合现有的 `model.generate()`、
   `execute_code()`、`react_loop()` 等原语。
 
-- **切换模型提供商：** 实现与 `OllamaResponsesModel` 相同接口的类
+- **切换模型提供商：** 实现与 `ResponsesModel` 相同接口的类
   （`generate(messages, stop_sequences, ...)` 返回 `ChatMessage`），传入 agent。
 
 ### 常见陷阱
