@@ -41,8 +41,6 @@ model = get_local_model(
 )
 ```
 
-也可以直接使用 `LiteLLMModel` 传入任意 provider。
-
 ### 极速流 — 单次代码生成
 
 ```python
@@ -114,11 +112,13 @@ mini_agent/
 ├── examples/
 │   ├── basic_usage.py           # 最简使用示例
 │   ├── fast_vs_deep.py          # 极速 vs 深思 对比
-│   └── custom_model.py          # 手动构造 LiteLLMModel
+│   └── custom_model.py          # 手动构造 OllamaResponsesModel
 ├── src/
 │   └── mini_agent/
-│       ├── __init__.py
+│       ├── __init__.py          # 公共 API 导出
 │       ├── config.py            # 提示词加载器
+│       ├── model.py             # OllamaResponsesModel 实现
+│       ├── sandbox_patch.py     # 沙盒补丁
 │       └── agent.py             # ReAct Agent 实现
 ├── verify/
 │   └── verify.py                # 验证脚本
@@ -130,5 +130,24 @@ mini_agent/
 
 ## 依赖
 
-- `smolagents[litellm]` — Hugging Face Agent 框架
-- 本地 Ollama 服务
+- Python >= 3.10
+- `smolagents` >= 1.26.0
+- `httpx` >= 0.27.0
+- 本地 Ollama 服务 + 可用模型
+
+---
+
+## 沙盒配置
+
+smolagents 的 `LocalPythonExecutor` 默认只允许调用 `BASE_PYTHON_TOOLS` 中的函数。
+如果模型需要调用 `bytearray`, `bytes`, `open` 等内置函数，需启用沙盒补丁：
+
+```python
+import mini_agent.sandbox_patch  # 在使用 agent 前导入
+
+# 可选：启用文件夹保护
+# mini_agent.sandbox_patch.OPEN_FOLDER_PROTECTION = "/path/to/allowed/dir"
+```
+
+默认配置下，所有 Python 内置函数均可使用，仅封禁危险函数（`eval`, `exec`, `__import__` 等）。
+详细配置见 [doc/implementation.md#沙盒配置](doc/implementation.md#沙盒配置)。

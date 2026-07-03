@@ -3,7 +3,7 @@
 ## 概述
 
 mini-agent 是一个基于 Hugging Face `smolagents` 库的本地轻量级编程 Agent，
-通过 `LiteLLMModel` 对接本地 Ollama 模型（如 ornith:9b），
+通过 `OllamaResponsesModel`（基于 httpx 调用 OpenAI Responses API）对接本地 Ollama 模型（如 ornith:9b），
 提供**极速流**和**深思流**两种 ReAct 模式。
 
 设计哲学：
@@ -29,6 +29,8 @@ mini_agent/
 │   └── mini_agent/
 │       ├── __init__.py          # 公共 API 导出
 │       ├── config.py            # 提示词加载器（无模型配置）
+│       ├── model.py             # OllamaResponsesModel 实现
+│       ├── sandbox_patch.py     # 沙盒补丁
 │       └── agent.py             # ReAct Agent 实现
 ├── verify/
 │   └── verify.py                # 端到端验证脚本
@@ -41,7 +43,7 @@ mini_agent/
 ## 配置文件
 
 `config/prompts.json` 是唯一配置文件，包含两种模式的所有提示词模板，
-支持 `{prompt}`、`{target_file}` 等占位符由 Python 在运行时填入。
+支持 `{prompt}`、`target_file}` 等占位符由 Python 在运行时填入。
 
 ---
 
@@ -54,14 +56,32 @@ mini_agent/
 - 使用模块级缓存，避免重复读取磁盘
 - ⚠ 不再包含 `OllamaConfig` / `load_config` 等模型相关代码
 
+### `src/mini_agent/model.py`
+
+自定义的 `OllamaResponsesModel` 类，继承自 smolagents 的 `Model`：
+
+- 使用 `httpx` 直接调用 Ollama 的 `/v1/responses` 端点
+- 支持 SSE 流式传输，首 Token 到达约 0.3 秒
+- 从响应中提取 `output_text` 内容
+- 支持工具调用（通过 Responses API `tools` 参数）
+- 支持 `stop_sequences` 和 `max_output_tokens`
+
+### `src/mini_agent/sandbox_patch.py`
+
+smolagents 沙盒的 monkey-patch 补丁：
+
+- **黑名单机制**：允许所有 Python 内置函数，仅封禁危险函数
+- **文件夹保护**：可选限制 `open()` 只能访问指定目录
+
 ### `src/mini_agent/agent.py`
 
 **模型工厂（可选）**
 
-- `get_local_model(model_name, api_base, temperature, ctx_size)` → `LiteLLMModel`
-  用户可完全跳过此函数，直接用 `LiteLLMModel(...)` 构造。
+- `get_local_model(model_name, api_base, temperature, max_output_tokens)` → `OllamaResponsesModel`
+  用户可完全跳过此函数，直接用 `OllamaResponsesModel(...)` 构造。
 
 **三个工具函数：**
+
 | 工具 | 说明 |
 |------|------|
 | `write_file(filename, content)` | 将字符串写入文件 |
@@ -72,7 +92,7 @@ mini_agent/
 
 | | 极速流 | 深思流 |
 |---|---|---|
-| 函数 | `run_fast_agent(prompt, model, max_steps=1)` | `run_deep_agent(prompt, model, target_file, max_steps=8)` |
+| 函数 | `run_fast_agent(prompt, model)` | `run_deep_agent(prompt, model, target_file, max_steps=8)` |
 | 本质 | 单次推理，无 Acting | 完整 ReAct 循环 |
 | 工具 | 无 | write_file + run_python_file + execute_bash_command |
 | 温度建议 | 0.0（确定性输出） | 0.4~0.5（多样性试错） |
@@ -98,7 +118,7 @@ Deep Agent (深思流):
 
 ### 问题
 
-ornith:9b（基于 Qwen）等模型有 Ollama 原生的「思考模式」。
+ornith:9b（Qwen 系）等模型有 Ollama 原生的「思考模式」。
 收到代码生成请求时，模型会把推理过程写入 `message.thinking` 字段，
 在 `message.content` 中输出最终代码。但如果任务稍复杂（如 "Fibonacci one-liner"），
 模型会在 thinking 中反复试错多个方案，消耗 2000-4000 token 仍未输出 content。
@@ -122,19 +142,6 @@ ornith:9b（基于 Qwen）等模型有 Ollama 原生的「思考模式」。
 用 walrus operator → （被 token 限制截断）
 ```
 token 用完后 content 仍为空。
-
-### 尝试过的方案
-
-测试了 7 种 system prompt 策略，全部无效：
-- "Do NOT include any explanation, or `<thinking>` blocks"
-- "Output the FIRST solution that comes to mind. Do not try multiple approaches."
-- "You are a confident programmer. Never second-guess or revise."
-- "Answer immediately with code. Do not plan, reason, or evaluate alternatives."
-- "Code only. First thought, first output."
-- "You are a senior developer who writes code from memory without deliberation."
-- "This is a trivial task. Do not overthink."
-
-原因：Ollama 的 thinking 字段是模型架构层面的行为，不受 system prompt 控制。
 
 ### 解决方案：Assistant Prefill
 
@@ -190,77 +197,76 @@ Prefill 在所有任务上都成功，且 token 数减少 50-90%，耗时显著�
 
 也可在调用时通过参数覆盖：`run_fast_agent(prompt, model, prefill=False)`。
 
-### Prefill 机制（Fast Agent）
+---
 
-#### 问题
+## 沙盒配置（Sandbox Patch）
 
-ornith:9b（Qwen 系）有 Ollama thinking 模式。模型把推理放在 `message.thinking` 字段，
-`message.content` 为空。实测 7 种不同 system prompt（禁止试错、自信模式、直觉回答等）
-**全部无效**——thinking 行为是架构层面的，不受 prompt 控制。
+### 背景
 
-模型在 thinking 中的典型行为：
+smolagents 的 `LocalPythonExecutor` 对 Python 内置函数使用**白名单机制**。
+`BASE_PYTHON_TOOLS` 中的函数可被模型直接调用，而其他内置函数（如 `bytearray`, `bytes`, `memoryview` 等）则会被阻止。
+
+当模型尝试调用 `bytearray(1000)` 时，会触发：
 
 ```
-让我想个 one-liner...
+InterpreterError: Forbidden function evaluation: 'bytearray' is not among the explicitly allowed tools or defined/imported in the preceding code
+```
+
+> `additional_authorized_imports` 参数只控制 `import` 语句，**不影响函数调用**。
+
+### 解决方案：黑名单机制 + 文件夹保护
+
+`src/mini_agent/sandbox_patch.py` 通过 monkey-patch 方式修改 smolagents 的沙盒行为：
+
+1. **黑名单机制**：允许所有 Python 内置函数，仅封禁危险函数
+2. **文件夹保护**：可选限制 `open()` 只能访问指定目录
+
+### 配置选项
+
 ```python
-print(*(a:=[] or [0,1], ...))   # 太复杂了
-```
-等等，换一个...
-```python
-a=[0,1]; print(*(...))           # __setitem__ 返回 None，不行
-```
-让我再试 lambda...                # 300 token 用完，content 始终为空
-```
+# mini_agent/sandbox_patch.py
 
-#### 解决方案
-
-在 messages 末尾追加 assistant 消息，预填代码块开头：
-
-```python
-messages = [
-    {"role": "system", "content": "Output only Python code."},
-    {"role": "user", "content": task},
-    {"role": "assistant", "content": "```python\n"},   # ← prefill
-]
-```
-
-模型收到自己已开始写代码块的信号，直接续写，完全跳过 thinking 阶段。
-返回结果时补回 `prefill_text` 前缀，得到完整代码块。
-
-#### 配置
-
-`config/prompts.json` 的 `fast_agent` section：
-
-```json
-{
-  "fast_agent": {
-    "system_instruction": "...",
-    "prefill": true,
-    "prefill_text": "```python\n"
-  }
+# 封禁的内置函数（代码执行、导入绕过等）
+FORBIDDEN_BUILTINS: set[str] = {
+    "eval", "exec", "compile", "__import__",
+    "breakpoint", "help", "input",
+    "globals", "locals", "vars", "dir",
+    "getattr", "setattr", "delattr", "hasattr",
+    "type", "property", "super",
 }
+
+# 文件夹保护：open() 只能访问该目录
+# 设置为 None 表示不限制
+OPEN_FOLDER_PROTECTION: str | None = None
 ```
 
-| 字段 | 默认值 | 说明 |
-|------|--------|------|
-| `prefill` | `true` | 是否启用 assistant prefill |
-| `prefill_text` | `` `` ```python\n `` `` | 预填到 assistant 消息的文本 |
+### 工作原理
 
-也可在调用时覆盖：`run_fast_agent(prompt, model, prefill=False)`。
+当模型执行 `bytearray(1000)`：
 
-#### 性能对比
+1. `evaluate_call` 检查：是否在 `state`/`static_tools`/`custom_tools`/`ERRORS` 中？否
+2. 是 Python 内置函数？是
+3. 在黑名单中？否
+4. → 将 `bytearray` 添加到 `state`，允许调用
 
-| 任务 | 无 prefill | 有 prefill |
-|------|-----------|-----------|
-| Fibonacci one-liner | ❌ 10.3s / 500 tokens（空 content） | ✅ 1.3s / 48 tokens |
-| Palindrome 检查 | ✅ 2.1s / 89 tokens | ✅ 1.7s / 69 tokens |
-| CSV 读取脚本 | ✅ 8.0s / 385 tokens | ✅ 2.1s / 90 tokens |
-| 下载网页提取链接 | ✅ 9.1s / 435 tokens | ✅ 3.0s / 134 tokens |
-| 反转链表 | ✅ 8.6s / 414 tokens | ✅ 7.1s / 338 tokens |
-| 合并有序链表 | ✅ 6.3s / 297 tokens | ✅ 5.3s / 250 tokens |
-| sum 1 to 100 | ✅ 1.9s / 81 tokens | ✅ 0.8s / 20 tokens |
+当 `open("file.txt")` 且启用了文件夹保护：
 
-7/7 任务成功（无 prefill 时 Fibonacci 失败），平均 token 数减少 57%。
+1. 内置函数检查通过
+2. `open` 解析为 `_safe_open` 包装函数
+3. 包装函数检查路径是否在 `OPEN_FOLDER_PROTECTION` 范围内
+4. 通过 → 调用真实的 `builtins.open`
+
+### 验证效果
+
+**修改前**：
+```
+InterpreterError: Forbidden function evaluation: 'bytearray'
+```
+
+**修改后**：
+```
+Step 1: 成功执行 bytearray(1000) → 返回 bytearray(b'\x00...')
+```
 
 ---
 
@@ -292,12 +298,13 @@ uv run python3 verify/verify.py
 |------|------|
 | `basic_usage.py` | 创建模型 → 运行 fast agent，最简流程 |
 | `fast_vs_deep.py` | 同一任务分别在两种模式下执行，观察行为差异 |
-| `custom_model.py` | 跳过 `get_local_model`，直接构造 `LiteLLMModel` |
+| `custom_model.py` | 跳过 `get_local_model`，直接构造 `OllamaResponsesModel` |
 
 ---
 
 ## 依赖
 
 - Python >= 3.10
-- smolagents[litellm] >= 1.26.0
+- `smolagents` >= 1.26.0
+- `httpx` >= 0.27.0
 - 本地 Ollama 服务 + 可用模型
