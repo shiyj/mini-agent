@@ -9,9 +9,8 @@ Architecture:
   └──────────────────────────────────────────────────────┘
 
   ┌─ Deep Agent (深思流) ────────────────────────────────┐
-  │  Full ReAct loop via CodeAgent with custom (concise) │
-  │  prompt_templates that replace the default 174-line  │
-  │  smolagents system prompt.                            │
+  │  Full ReAct loop via CodeAgent with smolagents'      │
+  │  default 174-line code_agent.yaml system prompt.     │
   │  max_steps=8-15, 3 tools, temp=0.4-0.5.             │
   │  Use: complex scripts, debugging, iterative tasks    │
   └──────────────────────────────────────────────────────┘
@@ -22,12 +21,11 @@ Users create the model externally and pass it in.
 import subprocess
 from smolagents import (
     CodeAgent, tool,
-    PromptTemplates, PlanningPromptTemplate,
-    ManagedAgentPromptTemplate, FinalAnswerPromptTemplate,
 )
 
 from .config import load_prompts
 from .model import OllamaResponsesModel
+from .sandbox_patch import FORBIDDEN_BUILTINS, OPEN_FOLDER_PROTECTION, _is_path_allowed
 
 
 # ---------------------------------------------------------------------------
@@ -147,35 +145,7 @@ def execute_bash_command(command: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3. Custom prompt templates for deep agent
-#    (replaces smolagents default 174-line code_agent.yaml)
-# ---------------------------------------------------------------------------
-
-_DEEP_SYSTEM_PROMPT = """You are a coding agent.
-
-1. Write code with write_file() — save to the target file.
-2. Run it with run_python_file() — check the output.
-3. If there are errors, fix them and repeat.
-4. Once the script runs correctly, call final_answer().
-
-Output code in ```python ... ``` blocks."""
-
-_DEEP_FINAL_ANSWER = FinalAnswerPromptTemplate(
-    pre_messages="The agent got stuck. Based on the conversation below, provide a final answer.",
-    post_messages="Task: {task}\n\nProvide the best answer you can from the above.",
-)
-
-# Unused by our config (no planning_interval, no managed agents) — keep empty.
-_DEEP_PROMPT_TEMPLATES = PromptTemplates(
-    system_prompt=_DEEP_SYSTEM_PROMPT,
-    planning=PlanningPromptTemplate(initial_plan="", update_plan_pre_messages="", update_plan_post_messages=""),
-    managed_agent=ManagedAgentPromptTemplate(task="", report=""),
-    final_answer=_DEEP_FINAL_ANSWER,
-)
-
-
-# ---------------------------------------------------------------------------
-# 4. Fast agent — direct model call, no CodeAgent overhead
+# 3. Fast agent — direct model call, no CodeAgent overhead
 # ---------------------------------------------------------------------------
 
 def run_fast_agent(
@@ -229,33 +199,6 @@ def run_fast_agent(
 # 4. Deep agent — Full ReAct loop with tools and iteration
 # ---------------------------------------------------------------------------
 
-def _capture_env_snapshot() -> str:
-    try:
-        snapshot_parts = []
-        cwd = subprocess.run(
-            "pwd", shell=True, capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        snapshot_parts.append(f"cwd: {cwd}")
-
-        ls_out = subprocess.run(
-            "ls -1 2>/dev/null | head -40",
-            shell=True, capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        if ls_out:
-            snapshot_parts.append(f"files:\n{ls_out}")
-
-        pip_out = subprocess.run(
-            "pip list --format=columns 2>/dev/null | head -25",
-            shell=True, capture_output=True, text=True, timeout=10,
-        ).stdout.strip()
-        if pip_out:
-            snapshot_parts.append(f"packages:\n{pip_out}")
-
-        return "\n".join(snapshot_parts)
-    except Exception:
-        return ""
-
-
 def run_deep_agent(
     prompt: str,
     model: OllamaResponsesModel,
@@ -264,9 +207,9 @@ def run_deep_agent(
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
 
-    Uses a custom system prompt (~6 lines) instead of smolagents' default
-    174-line template.  Before the task begins the agent receives an
-    environment snapshot (cwd, files, installed packages).
+    Uses smolagents' default CodeAgent system prompt (174-line
+    ``code_agent.yaml``).  The agent has access to file-write, file-run,
+    and bash-execution tools.
 
     Args:
         prompt: Task description.
@@ -284,26 +227,6 @@ def run_deep_agent(
         additional_authorized_imports=[
             "os", "sys", "time", "subprocess",
         ],
-        executor_kwargs={
-            "additional_functions": {"open": open},
-        },
-        prompt_templates=_DEEP_PROMPT_TEMPLATES,
         code_block_tags="markdown",
     )
-
-    prompts = load_prompts()
-    section = prompts.get("deep_agent", {})
-    template = section.get("user_template", "{prompt}")
-
-    formatted = {}
-    for key, value in section.items():
-        if key == "user_template":
-            continue
-        formatted[key] = value.replace("{target_file}", target_file)
-
-    context = dict(formatted)
-    context["env_snapshot"] = _capture_env_snapshot()
-    context["target_file"] = target_file
-    context["prompt"] = prompt
-    full_prompt = template.format(**context)
-    return agent.run(full_prompt)
+    return agent.run(prompt)
