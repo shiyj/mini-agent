@@ -9,9 +9,9 @@ Architecture:
   └──────────────────────────────────────────────────────┘
 
   ┌─ Deep Agent (深思流) ────────────────────────────────┐
-  │  Full ReAct loop via CodeAgent with smolagents'      │
-  │  default 174-line code_agent.yaml system prompt.     │
-  │  max_steps=8-15, 3 tools, temp=0.4-0.5.             │
+  │  Full ReAct loop: write → run → observe → fix.       │
+  │  Uses a small-model-optimized system prompt.         │
+  │  max_steps=8, 3 tools, temp=0.4-0.5.                │
   │  Use: complex scripts, debugging, iterative tasks    │
   └──────────────────────────────────────────────────────┘
 
@@ -19,13 +19,18 @@ Users create the model externally and pass it in.
 """
 
 import subprocess
-from smolagents import (
-    CodeAgent, tool,
-)
 
 from .config import load_prompts
 from .model import OllamaResponsesModel
-from .sandbox_patch import FORBIDDEN_BUILTINS, OPEN_FOLDER_PROTECTION, _is_path_allowed
+from .prompts import FAST_AGENT_SYSTEM
+from .react_agent import react_loop
+from .tools import Tool, tool
+from .types import (
+    ChatMessage,
+    MessageRole,
+    get_clean_message_list,
+    remove_content_after_stop_sequences,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +45,13 @@ def get_local_model(
 ) -> OllamaResponsesModel:
     """Create a model that talks to Ollama's ``/v1/responses`` endpoint.
 
-    No litellm dependency — uses ``httpx`` directly.  The Responses API
-    handles thinking/content separation natively, and the model's output
-    text is extracted from ``output_text`` items in the response.
+    No smolagents dependency — uses ``httpx`` directly.
 
     Args:
         model_name: Ollama model tag, e.g. ``"ornith:9b"``.
         api_base: Ollama server URL.
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate.
-            Prevents runaway thinking.
 
     Returns:
         A configured ``OllamaResponsesModel``.
@@ -145,7 +147,7 @@ def execute_bash_command(command: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 3. Fast agent — direct model call, no CodeAgent overhead
+# 3. Fast agent — direct model call, no ReAct loop
 # ---------------------------------------------------------------------------
 
 def run_fast_agent(
@@ -157,7 +159,7 @@ def run_fast_agent(
 
     Args:
         prompt: Task description.
-        model: Any smolagents-compatible model.
+        model: An OllamaResponsesModel instance.
         prefill: Whether to use assistant-prefill to bypass thinking mode.
             When True, appends ``{"role": "assistant", "content": "```python\\n"}``
             to the messages, forcing the model to continue from inside a code
@@ -169,7 +171,7 @@ def run_fast_agent(
     """
     prompts = load_prompts()
     sec = prompts.get("fast_agent", {})
-    system_instruction = sec.get("system_instruction", "Output only code. No explanation.")
+    system_instruction = sec.get("system_instruction", FAST_AGENT_SYSTEM)
 
     if prefill is None:
         prefill = sec.get("prefill", True)
@@ -207,26 +209,36 @@ def run_deep_agent(
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
 
-    Uses smolagents' default CodeAgent system prompt (174-line
-    ``code_agent.yaml``).  The agent has access to file-write, file-run,
-    and bash-execution tools.
+    Uses a small-model-optimized system prompt. The agent has access to
+    file-write, file-run, and bash-execution tools.
 
     Args:
         prompt: Task description.
-        model: Any smolagents-compatible model.
+        model: An OllamaResponsesModel instance.
         target_file: File the agent should write its script to.
         max_steps: Maximum ReAct iterations (8-15 recommended).
 
     Returns:
         The final agent output after all iterations.
     """
-    agent = CodeAgent(
-        tools=[write_file, run_python_file, execute_bash_command],
-        model=model,
-        max_steps=max_steps,
-        additional_authorized_imports=[
-            "os", "sys", "time", "subprocess",
-        ],
-        code_block_tags="markdown",
+    # Deep agent needs more tokens for complex scripts
+    model.max_output_tokens = max(model.max_output_tokens, 4096)
+
+    tools = [write_file, run_python_file, execute_bash_command]
+
+    task = (
+        f"{prompt}\n\n"
+        f"IMPORTANT: Follow these steps exactly:\n"
+        f"1. Use write_file(filename='{target_file}', content=<your code>) to save the script\n"
+        f"2. Use run_python_file(filename='{target_file}') to run it\n"
+        f"3. If there are errors, fix the code and write_file again, then run_python_file again\n"
+        f"4. When the script works correctly, call final_answer(result)"
     )
-    return agent.run(prompt)
+
+    return react_loop(
+        task=task,
+        model=model,
+        tools=tools,
+        max_steps=max_steps,
+        verbose=True,
+    )

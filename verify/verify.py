@@ -3,7 +3,7 @@
 
 Tests:
 1. Prompt loading from config/prompts.json
-2. Model connectivity via LiteLLMModel (simple completion)
+2. Model connectivity via OllamaResponsesModel (simple completion)
 3. Deep agent on a loop-optimisation task (with retry)
 """
 
@@ -41,7 +41,6 @@ def _model():
         _MODEL = get_local_model(
             model_name="ornith:9b",
             temperature=0.0,
-            ctx_size=4096,
         )
     return _MODEL
 
@@ -62,10 +61,12 @@ def step_prompts() -> None:
 
 def step_model_connectivity() -> None:
     model = _model()
-    response = model([
-        {"role": "system", "content": [{"type": "text", "text": "Reply with exactly one word."}]},
-        {"role": "user", "content": [{"type": "text", "text": "Say hello."}]},
-    ])
+    response = model.generate(
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "Reply with exactly one word."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Say hello."}]},
+        ],
+    )
     content = response.content.strip() if hasattr(response, "content") else str(response)
     assert len(content) > 0
     print(f"[PASS] Model responded: {content[:80]}")
@@ -102,7 +103,7 @@ def _check_script(target: str) -> str | None:
 
     print(f"  Script output:\n    " + "\n    ".join(output.splitlines()[:15]))
     if output.count("\n") > 15:
-        print(f"    ... ({output.count('\n') - 15} more lines)")
+        print(f"    ... ({output.count(chr(10)) - 15} more lines)")
     return None
 
 
@@ -114,14 +115,11 @@ def step_deep_agent_loop_optimization() -> None:
         if os.path.exists(target):
             os.remove(target)
 
-        # Heating strategy: each failure increases temperature so the model
-        # tries a different approach instead of getting stuck in the same bug.
         temp = min(0.45 + (attempt - 1) * 0.03, 0.7)
         model = get_local_model(
             model_name="ornith:9b",
             api_base="http://127.0.0.1:11434",
             temperature=temp,
-            ctx_size=16384,
         )
 
         start = time.time()

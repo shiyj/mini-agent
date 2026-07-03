@@ -1,4 +1,6 @@
-"""mini_agent — local lightweight programming agent built on smolagents.
+"""mini_agent — local lightweight programming agent.
+
+No smolagents dependency. Uses httpx for model calls and exec() for code execution.
 
 ReAct architecture with two depths:
   - run_fast_agent()   single-pass code generation, no tools
@@ -15,7 +17,8 @@ from .agent import (
 )
 from .config import load_prompts, build_prompt
 from .model import OllamaResponsesModel
-from . import sandbox_patch
+from .tools import Tool, tool
+from .types import ChatMessage, MessageRole, TokenUsage
 
 __all__ = [
     "get_local_model",
@@ -27,5 +30,9 @@ __all__ = [
     "run_deep_agent",
     "load_prompts",
     "build_prompt",
-    "sandbox_patch",
+    "Tool",
+    "tool",
+    "ChatMessage",
+    "MessageRole",
+    "TokenUsage",
 ]
