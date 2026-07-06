@@ -16,6 +16,7 @@ from .agent import (
     run_deep_agent,
 )
 from .config import load_prompts
+from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .tools import Tool, tool
 from .types import ChatMessage, MessageRole, TokenUsage
@@ -29,6 +30,8 @@ __all__ = [
     "run_fast_agent",
     "run_deep_agent",
     "load_prompts",
+    "ContextCompressor",
+    "SummaryCompressor",
     "Tool",
     "tool",
     "ChatMessage",

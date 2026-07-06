@@ -18,6 +18,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from .code_executor import ExecutionResult, execute_code
+from .context import ContextCompressor
 from .tools import Tool
 from .types import (
     ChatMessage,
@@ -93,16 +94,18 @@ def react_loop(
     tools: list[Tool],
     max_steps: int = 8,
     verbose: bool = True,
+    compressor: ContextCompressor | None = None,
 ) -> str:
     """Run the ReAct loop until final_answer or max_steps.
 
     Args:
-        system_prompt: The system prompt (built by the caller from JSON template).
+        system_prompt: The system prompt (built by the caller from prompts.py).
         task: The task description.
         model: A ``ResponsesModel`` instance.
         tools: List of Tool objects available to the agent.
         max_steps: Maximum number of Thought/Code/Observation cycles.
         verbose: If True, print step progress to stderr.
+        compressor: Optional context compressor to bound conversation length.
 
     Returns:
         The final answer string, or an error message.
@@ -118,6 +121,16 @@ def react_loop(
     for step in range(1, max_steps + 1):
         if verbose:
             print(f"\n{'='*20} Step {step} {'='*20}", file=sys.stderr)
+
+        # 0. Compress context if a compressor is configured
+        if compressor is not None:
+            before = len(messages)
+            messages = compressor.compress(messages, model)
+            if verbose and len(messages) < before:
+                print(
+                    f"[context] {before} -> {len(messages)} messages (compressed)",
+                    file=sys.stderr,
+                )
 
         # 1. Call the model
         cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)

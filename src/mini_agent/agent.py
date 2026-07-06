@@ -20,6 +20,7 @@ Users create the model externally and pass it in.
 import subprocess
 
 from .config import load_prompts
+from .context import ContextCompressor
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, build_deep_system_prompt
 from .react_agent import react_loop
@@ -205,6 +206,7 @@ def run_deep_agent(
     model: ResponsesModel,
     target_file: str = "output.py",
     max_steps: int = 8,
+    compressor: ContextCompressor | None = None,
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
 
@@ -216,6 +218,7 @@ def run_deep_agent(
         model: A ``ResponsesModel`` instance.
         target_file: File the agent should write its script to.
         max_steps: Maximum ReAct iterations (8-15 recommended).
+        compressor: Optional context compressor (e.g. SummaryCompressor).
 
     Returns:
         The final agent output after all iterations.
@@ -235,4 +238,5 @@ def run_deep_agent(
         tools=tools,
         max_steps=max_steps,
         verbose=True,
+        compressor=compressor,
     )

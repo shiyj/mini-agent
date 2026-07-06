@@ -10,15 +10,21 @@ This demo:
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from mini_agent import get_local_model, run_deep_agent
+from mini_agent import get_local_model, run_deep_agent, SummaryCompressor
 
 # Work under examples/data/ so the agent edits scripts in a clean directory
 DATA_DIR = Path(__file__).resolve().parent / "data"
 EXAMPLE_SRC = DATA_DIR / "modify_python.py.example"
 TARGET = DATA_DIR / "modify_python.py"
-LOG_FILE = DATA_DIR / "requests.jsonl"
+
+# Log file: logs/ directory with timestamp in filename
+LOGS_DIR = Path(__file__).resolve().parent / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+LOG_FILE = LOGS_DIR / f"fix_python_error_{timestamp}.jsonl"
 
 print("=" * 60)
 print("mini-agent  Fix Python Error Demo")
@@ -50,6 +56,7 @@ result = run_deep_agent(
     model=model,
     target_file=str(TARGET),
     max_steps=10,
+    compressor=SummaryCompressor(keep_recent=6, trigger_threshold=10),
 )
 
 print("=" * 60)
