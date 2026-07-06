@@ -61,8 +61,8 @@ class ResponsesModel:
         api_base: Server base URL (default ``http://localhost:11434``).
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate (default 512).
-        stream: If True (default), use SSE streaming. If False, use a single POST
-            request — useful for debugging or when streaming is not needed.
+        stream: If False (default), use a single POST request — easier for debugging.
+            If True, use SSE streaming for lower first-token latency.
     """
 
     def __init__(
@@ -71,7 +71,7 @@ class ResponsesModel:
         api_base: str = "http://localhost:11434",
         temperature: float = 0.0,
         max_output_tokens: int = 512,
-        stream: bool = True,
+        stream: bool = False,
         **kwargs,
     ):
         self.model_name = model_name

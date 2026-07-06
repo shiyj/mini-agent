@@ -67,17 +67,10 @@ def execute_code(
     # so that imports and function definitions share the same namespace
     exec_ns: dict[str, Any] = {"__name__": "__main__", "__builtins__": __builtins__}
 
-    # Inject tools wrapped to auto-print their return values
-    # (exec() only captures print() output, not expression return values)
+    # Inject tools into the execution namespace
+    # The model controls its own output via print() — no auto-print wrapper.
     for t in tools:
-        def _make_wrapper(tool: Tool):
-            def _wrapper(**kwargs):
-                result = tool(**kwargs)
-                if result is not None:
-                    print(result)
-                return result
-            return _wrapper
-        exec_ns[t.name] = _make_wrapper(t)
+        exec_ns[t.name] = t
 
     # Inject final_answer
     exec_ns["final_answer"] = final_answer
