@@ -1,0 +1,87 @@
+{
+  "providers": {
+    "ollama-local": {
+      "baseURL": "http://localhost:11434/v1",
+      "models": {
+        "ornith:9b": {
+          "context_window": 65536,
+          "max_output_tokens": 4096,
+          "max_steps": 8,
+          "max_observation_length": 3000,
+          "compressor": {
+            "max_messages": 25,
+            "compress_batch": 8,
+            "keep_recent": 10,
+            "max_summary_tokens": 512
+          }
+        },
+        "qwen3-coder": {
+          "context_window": 131072,
+          "max_output_tokens": 8192,
+          "max_steps": 15,
+          "max_observation_length": 5000,
+          "compressor": {
+            "max_messages": 30,
+            "compress_batch": 10,
+            "keep_recent": 12,
+            "max_summary_tokens": 1024
+          }
+        },
+        "glm-4.7-flash:latest": {
+          "context_window": 131072,
+          "max_output_tokens": 4096,
+          "max_steps": 8,
+          "max_observation_length": 3000,
+          "compressor": {
+            "max_messages": 25,
+            "compress_batch": 8,
+            "keep_recent": 10,
+            "max_summary_tokens": 512
+          }
+        }
+      }
+    },
+    "openai": {
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "${OPENAI_API_KEY}",
+      "models": {
+        "gpt-4o": {
+          "context_window": 128000,
+          "max_output_tokens": 4096,
+          "max_steps": 15,
+          "max_observation_length": 5000,
+          "compressor": {
+            "max_messages": 40,
+            "compress_batch": 10,
+            "keep_recent": 15,
+            "max_summary_tokens": 1024
+          }
+        },
+        "gpt-4o-mini": {
+          "context_window": 128000,
+          "max_output_tokens": 4096,
+          "max_steps": 8,
+          "max_observation_length": 3000,
+          "compressor": {
+            "max_messages": 30,
+            "compress_batch": 8,
+            "keep_recent": 12,
+            "max_summary_tokens": 512
+          }
+        }
+      }
+    }
+  },
+  "defaults": {
+    "context_window": 65536,
+    "max_output_tokens": 4096,
+    "max_observation_length": 2000,
+    "max_steps": 8,
+    "compressor": {
+      "max_messages": 20,
+      "compress_batch": 5,
+      "keep_recent": 6,
+      "max_summary_tokens": 512
+    }
+  }
+}

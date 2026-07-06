@@ -55,8 +55,7 @@ result = run_deep_agent(
     prompt=TASK,
     model=model,
     target_file=str(TARGET),
-    max_steps=10,
-    compressor=SummaryCompressor(keep_recent=6, trigger_threshold=10),
+    max_steps=10
 )
 
 print("=" * 60)

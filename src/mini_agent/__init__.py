@@ -14,8 +14,9 @@ from .agent import (
     execute_bash_command,
     run_fast_agent,
     run_deep_agent,
+    run_deep_agent_with_config,
 )
-from .config import load_prompts
+from .config import load_agent_config, load_prompts
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .tools import Tool, tool
@@ -29,7 +30,9 @@ __all__ = [
     "execute_bash_command",
     "run_fast_agent",
     "run_deep_agent",
+    "run_deep_agent_with_config",
     "load_prompts",
+    "load_agent_config",
     "ContextCompressor",
     "SummaryCompressor",
     "Tool",

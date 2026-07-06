@@ -19,8 +19,8 @@ Users create the model externally and pass it in.
 
 import subprocess
 
-from .config import load_prompts
-from .context import ContextCompressor
+from .config import load_agent_config, load_prompts
+from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, build_deep_system_prompt
 from .react_agent import react_loop
@@ -40,8 +40,10 @@ from .types import (
 def get_local_model(
     model_name: str,
     api_base: str = "http://localhost:11434",
+    api_key: str | None = None,
     temperature: float = 0.0,
-    max_output_tokens: int = 512,
+    max_output_tokens: int = 4096,
+    context_window: int = 65536,
     log_file: str | None = None,
 ) -> ResponsesModel:
     """Create a model that talks to a ``/v1/responses`` endpoint.
@@ -51,8 +53,10 @@ def get_local_model(
     Args:
         model_name: Model tag, e.g. ``"ornith:9b"``.
         api_base: Server base URL.
+        api_key: Optional API key for authenticated endpoints.
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate.
+        context_window: Model's maximum context window in tokens.
         log_file: Optional path to a JSONL file for request/response logging.
 
     Returns:
@@ -61,8 +65,10 @@ def get_local_model(
     return ResponsesModel(
         model_name=model_name,
         api_base=api_base,
+        api_key=api_key,
         temperature=temperature,
         max_output_tokens=max_output_tokens,
+        context_window=context_window,
         log_file=log_file,
     )
 
@@ -206,6 +212,7 @@ def run_deep_agent(
     model: ResponsesModel,
     target_file: str = "output.py",
     max_steps: int = 8,
+    max_observation_length: int = 2000,
     compressor: ContextCompressor | None = None,
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
@@ -218,14 +225,12 @@ def run_deep_agent(
         model: A ``ResponsesModel`` instance.
         target_file: File the agent should write its script to.
         max_steps: Maximum ReAct iterations (8-15 recommended).
+        max_observation_length: Max characters for observation content (0 = no truncation).
         compressor: Optional context compressor (e.g. SummaryCompressor).
 
     Returns:
         The final agent output after all iterations.
     """
-    # Deep agent needs more tokens for complex scripts
-    model.max_output_tokens = max(model.max_output_tokens, 4096)
-
     tools = [write_file, run_python_file, execute_bash_command]
 
     # Build the system prompt — all text comes from prompts.py
@@ -237,6 +242,57 @@ def run_deep_agent(
         model=model,
         tools=tools,
         max_steps=max_steps,
+        max_observation_length=max_observation_length,
         verbose=True,
+        compressor=compressor,
+    )
+
+
+def run_deep_agent_with_config(
+    prompt: str,
+    model_name: str,
+    provider_name: str | None = None,
+    target_file: str = "output.py",
+    log_file: str | None = None,
+) -> str:
+    """One-shot deep agent: load config, create model, build compressor, run.
+
+    This is the simplest entry point — just provide a model name.
+
+    Args:
+        prompt: Task description.
+        model_name: Model identifier (e.g. ``"deepseek-chat"``, ``"gpt-4o"``).
+        provider_name: Optional provider name to disambiguate models.
+        target_file: File the agent should write its script to.
+        log_file: Optional path to a JSONL log file.
+
+    Returns:
+        The final agent output after all iterations.
+    """
+    config = load_agent_config(model_name, provider_name=provider_name)
+
+    model = get_local_model(
+        model_name=model_name,
+        api_base=config["baseURL"],
+        api_key=config.get("apiKey") or None,
+        max_output_tokens=config["max_output_tokens"],
+        context_window=config["context_window"],
+        log_file=log_file,
+    )
+
+    compressor_cfg = config.get("compressor", {})
+    compressor = SummaryCompressor(
+        max_messages=compressor_cfg.get("max_messages", 20),
+        compress_batch=compressor_cfg.get("compress_batch", 5),
+        keep_recent=compressor_cfg.get("keep_recent", 6),
+        max_summary_tokens=compressor_cfg.get("max_summary_tokens", 512),
+    )
+
+    return run_deep_agent(
+        prompt=prompt,
+        model=model,
+        target_file=target_file,
+        max_steps=config.get("max_steps", 8),
+        max_observation_length=config.get("max_observation_length", 2000),
         compressor=compressor,
     )

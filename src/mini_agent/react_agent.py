@@ -32,6 +32,14 @@ if TYPE_CHECKING:
     from .model import ResponsesModel
 
 
+def _truncate_observation(text: str, max_length: int) -> str:
+    """Truncate observation text at character level, preserving head and tail."""
+    if max_length <= 0 or len(text) <= max_length:
+        return text
+    half = max_length // 2
+    return text[:half] + f"\n... [truncated {len(text) - max_length} chars] ...\n" + text[-half:]
+
+
 def parse_code(text: str) -> str | None:
     """Extract Python code from the LLM's markdown output.
 
@@ -93,6 +101,7 @@ def react_loop(
     model: "ResponsesModel",
     tools: list[Tool],
     max_steps: int = 8,
+    max_observation_length: int = 2000,
     verbose: bool = True,
     compressor: ContextCompressor | None = None,
 ) -> str:
@@ -104,6 +113,7 @@ def react_loop(
         model: A ``ResponsesModel`` instance.
         tools: List of Tool objects available to the agent.
         max_steps: Maximum number of Thought/Code/Observation cycles.
+        max_observation_length: Max characters for observation content (0 = no truncation).
         verbose: If True, print step progress to stderr.
         compressor: Optional context compressor to bound conversation length.
 
@@ -128,9 +138,30 @@ def react_loop(
             messages = compressor.compress(messages, model)
             if verbose and len(messages) < before:
                 print(
-                    f"[context] {before} -> {len(messages)} messages (compressed)",
+                    f'[context] {before} -> {len(messages)} messages (compressed)',
                     file=sys.stderr,
                 )
+        
+        # 0a. Token-based compress check (if compressor configured)
+        if compressor is not None and hasattr(model, 'context_window') and hasattr(model, 'max_output_tokens'):
+            # Character-based estimate: ~4 chars per token
+            # Calculate current token estimate from all messages
+            total_chars = sum(len(msg.get('content', '')) for msg in messages)
+            estimated_tokens = total_chars // 4
+            
+            max_input_tokens = model.context_window - model.max_output_tokens
+            if estimated_tokens > max_input_tokens * 0.85:  # Buffer
+                if verbose:
+                    print(f'[token-check] Estimated {estimated_tokens} tokens exceeding {max_input_tokens} max, compressing', file=sys.stderr)
+                before = len(messages)
+                # Keep only system, task, recent messages (force compress if needed)
+                # Re-use compressor with batch size increased to clear space
+                old_keep = getattr(compressor, 'compress_batch', 5)
+                setattr(compressor, 'compress_batch', len(messages))
+                messages = compressor.compress(messages, model)
+                setattr(compressor, 'compress_batch', old_keep)
+                if verbose and len(messages) < before:
+                    print(f'[token-compress] {before} -> {len(messages)} messages', file=sys.stderr)
 
         # 1. Call the model
         cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
@@ -192,6 +223,9 @@ def react_loop(
             observation = f"Execution logs:\n{result.logs}"
             if result.output is not None:
                 observation += f"\nLast output: {result.output}"
+
+        if max_observation_length > 0:
+            observation = _truncate_observation(observation, max_observation_length)
 
         if verbose:
             print(f"\nObservation:\n{observation[:500]}", file=sys.stderr)

@@ -70,8 +70,10 @@ class ResponsesModel:
         self,
         model_name: str,
         api_base: str = "http://localhost:11434",
+        api_key: str | None = None,
         temperature: float = 0.0,
         max_output_tokens: int = 512,
+        context_window: int = 65536,
         stream: bool = False,
         log_file: str | None = None,
         **kwargs,
@@ -79,8 +81,10 @@ class ResponsesModel:
         self.model_name = model_name
         self.model_id = model_name
         self.api_base = api_base.rstrip("/")
+        self.api_key = api_key
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
+        self.context_window = context_window
         self.stream = stream
         self.log_file = log_file
         self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
@@ -232,10 +236,13 @@ class ResponsesModel:
     ) -> tuple[str, dict[str, Any]]:
         """Send a non-streaming request and extract output from the JSON response."""
         url = f"{self.api_base}/v1/responses"
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         # Ensure stream is False for the actual request
         body["stream"] = False
         self._log("request", body)
-        resp = self._client.post(url, json=body)
+        resp = self._client.post(url, json=body, headers=headers)
         try:
             resp.raise_for_status()
             data = resp.json()
@@ -253,7 +260,10 @@ class ResponsesModel:
         """POST to ``/v1/responses`` with ``stream: true`` and yield
         ``(event_type, parsed_data)`` tuples from the SSE stream."""
         url = f"{self.api_base}/v1/responses"
-        with self._client.stream("POST", url, json=body) as resp:
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        with self._client.stream("POST", url, json=body, headers=headers) as resp:
             resp.raise_for_status()
             current_event = ""
             for raw_line in resp.iter_lines():
