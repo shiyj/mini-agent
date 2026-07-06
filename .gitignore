@@ -12,3 +12,4 @@ uv.lock
 logs/
 .omo/
 .DS_Store
+examples/data/modify_python.py

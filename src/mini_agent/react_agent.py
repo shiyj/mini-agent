@@ -18,7 +18,6 @@ import sys
 from typing import TYPE_CHECKING
 
 from .code_executor import ExecutionResult, execute_code
-from .prompts import build_deep_system_prompt
 from .tools import Tool
 from .types import (
     ChatMessage,
@@ -36,10 +35,13 @@ def parse_code(text: str) -> str | None:
     """Extract Python code from the LLM's markdown output.
 
     Strips <think>...</think> blocks (Qwen thinking mode) first.
-    Then extracts the LAST ```python``` code block (models sometimes
-    repeat code in both thinking and response sections).
+    Then extracts code blocks in order of preference:
+    1. ```python / ```py — returned as-is (Python code)
+    2. ```bash / ```sh / ```shell — converted to execute_bash_command() calls
+    3. ``` (generic) — returned as-is
+    4. Bare code without fences — tested via ast.parse()
 
-    Returns None if no code can be extracted.
+    Returns None if no usable code can be extracted.
     """
     # Strip <think>...</think> blocks (Qwen/ornith thinking mode)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
@@ -47,19 +49,33 @@ def parse_code(text: str) -> str | None:
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
 
-    # Try ```python ... ``` pattern first
+    # 1. ```python / ```py — native Python code
     pattern_py = r"```(?:python|py)\s*\n(.*?)```"
     matches = re.findall(pattern_py, text, re.DOTALL)
     if matches:
         return "\n\n".join(m.strip() for m in matches)
 
-    # Try generic ``` ... ``` pattern
+    # 2. ```bash / ```sh / ```shell — convert to execute_bash_command() call
+    pattern_bash = r"```(?:bash|sh|shell)\s*\n(.*?)```"
+    matches = re.findall(pattern_bash, text, re.DOTALL)
+    if matches:
+        parts = []
+        for block in matches:
+            content = block.strip()
+            # Use repr() for safe quoting — handles any embedded quotes
+            parts.append(
+                f'__result = execute_bash_command({repr(content)})\n'
+                f"print(__result)"
+            )
+        return "\n\n".join(parts)
+
+    # 3. Generic ``` ... ``` — no language tag, try as Python
     pattern_generic = r"```\s*\n(.*?)```"
     matches = re.findall(pattern_generic, text, re.DOTALL)
     if matches:
         return "\n\n".join(m.strip() for m in matches)
 
-    # Maybe the LLM outputted code directly without code fences
+    # 4. Maybe the LLM outputted code directly without code fences
     try:
         import ast
         ast.parse(text)
@@ -71,6 +87,7 @@ def parse_code(text: str) -> str | None:
 
 
 def react_loop(
+    system_prompt: str,
     task: str,
     model: "ResponsesModel",
     tools: list[Tool],
@@ -80,6 +97,7 @@ def react_loop(
     """Run the ReAct loop until final_answer or max_steps.
 
     Args:
+        system_prompt: The system prompt (built by the caller from JSON template).
         task: The task description.
         model: A ``ResponsesModel`` instance.
         tools: List of Tool objects available to the agent.
@@ -89,8 +107,6 @@ def react_loop(
     Returns:
         The final answer string, or an error message.
     """
-    system_prompt = build_deep_system_prompt(tools)
-
     # Conversation history
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},

@@ -1,0 +1,44 @@
+# Load temperature records from a CSV-like string.
+# Each line: YYYY-MM-DD,<temperature>
+def load_data(source):
+    records = []
+    for line in source.strip().splitlines():
+        if not line.strip():
+            continue
+        date, val = line.split(",")
+        records.append((date.strip(), float(val.strip())))
+    return records
+
+
+# Compute statistics from loaded records.
+# Returns total count, average temperature, days above average, and their dates.
+def analyze(records):
+    temps = [t for _, t in records]
+    avg = sum(temps) / len(temps)
+    above = 0
+    for d, t in recods:
+        if t > avg:
+            above += 1
+    return {
+        "total": len(records),
+        "average": round(avg, 1),
+        "above_average": above,
+        "days": [d for d, _ in records if _ > avg],
+    }
+
+
+# Sample temperature data for 7 days
+DATA = """2024-01-01,25.3
+2024-01-02,26.1
+2024-01-03,24.8
+2024-01-04,25.7
+2024-01-05,27.2
+2024-01-06,26.4
+2024-01-07,25.9"""
+
+result = analyze(load_data(DATA))
+print(f"Total records: {result['total']}")
+print(f"Average temp: {result['average']}C")
+print(f"Days above average: {result['above_average']}")
+for d in result["days"]:
+    print(f"  {d}")

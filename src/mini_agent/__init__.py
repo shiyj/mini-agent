@@ -15,7 +15,7 @@ from .agent import (
     run_fast_agent,
     run_deep_agent,
 )
-from .config import load_prompts, build_prompt
+from .config import load_prompts
 from .model import ResponsesModel
 from .tools import Tool, tool
 from .types import ChatMessage, MessageRole, TokenUsage
@@ -29,7 +29,6 @@ __all__ = [
     "run_fast_agent",
     "run_deep_agent",
     "load_prompts",
-    "build_prompt",
     "Tool",
     "tool",
     "ChatMessage",

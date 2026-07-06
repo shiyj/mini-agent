@@ -31,8 +31,8 @@ class Tool:
         self.func = func
         self.inputs = inputs or {}
 
-    def __call__(self, **kwargs) -> Any:
-        return self.func(**kwargs)
+    def __call__(self, *args, **kwargs) -> Any:
+        return self.func(*args, **kwargs)
 
     def to_prompt(self) -> str:
         """Generate a function signature string for the system prompt."""

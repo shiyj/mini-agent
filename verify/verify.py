@@ -15,7 +15,6 @@ from pathlib import Path
 
 from mini_agent import (
     load_prompts,
-    build_prompt,
     get_local_model,
     run_deep_agent,
     run_fast_agent,
@@ -53,9 +52,7 @@ def _model():
 def step_prompts() -> None:
     prompts = load_prompts()
     assert "fast_agent" in prompts, "prompts.json missing fast_agent key"
-    assert "deep_agent" in prompts, "prompts.json missing deep_agent key"
-    rendered = build_prompt("fast_agent", prompt="hello")
-    assert "hello" in rendered
+    assert "prefill" in prompts["fast_agent"]
     print(f"[PASS] Prompts loaded, keys={list(prompts.keys())}")
 
 

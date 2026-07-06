@@ -3,14 +3,13 @@
 Architecture:
   ┌─ Fast Agent (极速流) ───────────────────────────────┐
   │  Calls model.generate() directly, no agent scaffold. │
-  │  Uses only system_instruction from prompts.json.     │
   │  Single pass, ~50 words system prompt.               │
   │  Use: boilerplate, syntax conversion, one-shot gen   │
   └──────────────────────────────────────────────────────┘
 
   ┌─ Deep Agent (深思流) ────────────────────────────────┐
   │  Full ReAct loop: write → run → observe → fix.       │
-  │  Uses a small-model-optimized system prompt.         │
+  │  System prompt built by build_deep_system_prompt().   │
   │  max_steps=8, 3 tools, temp=0.4-0.5.                │
   │  Use: complex scripts, debugging, iterative tasks    │
   └──────────────────────────────────────────────────────┘
@@ -22,7 +21,7 @@ import subprocess
 
 from .config import load_prompts
 from .model import ResponsesModel
-from .prompts import FAST_AGENT_SYSTEM
+from .prompts import FAST_AGENT_SYSTEM, build_deep_system_prompt
 from .react_agent import react_loop
 from .tools import Tool, tool
 from .types import (
@@ -161,25 +160,22 @@ def run_fast_agent(
         prompt: Task description.
         model: A ``ResponsesModel`` instance.
         prefill: Whether to use assistant-prefill to bypass thinking mode.
-            When True, appends ``{"role": "assistant", "content": "```python\\n"}``
-            to the messages, forcing the model to continue from inside a code
-            block.  Defaults to the ``prefill`` key in ``prompts.json``
-            (``fast_agent`` section); falls back to True if unset.
+            Defaults to the ``prefill`` key in ``prompts.json``.
 
     Returns:
         The raw model output (code / text).
     """
-    prompts = load_prompts()
-    sec = prompts.get("fast_agent", {})
-    system_instruction = sec.get("system_instruction", FAST_AGENT_SYSTEM)
+    # Read prefill config from JSON; prompt text lives in prompts.py
+    prompts_cfg = load_prompts()
+    fast_cfg = prompts_cfg.get("fast_agent", {})
 
     if prefill is None:
-        prefill = sec.get("prefill", True)
+        prefill = fast_cfg.get("prefill", True)
 
-    prefill_text = sec.get("prefill_text", "```python\n")
+    prefill_text = fast_cfg.get("prefill_text", "```python\n")
 
     messages = [
-        {"role": "system", "content": [{"type": "text", "text": system_instruction}]},
+        {"role": "system", "content": [{"type": "text", "text": FAST_AGENT_SYSTEM}]},
         {"role": "user", "content": [{"type": "text", "text": prompt}]},
     ]
 
@@ -209,8 +205,8 @@ def run_deep_agent(
 ) -> str:
     """Deep ReAct: write → run → observe → fix → repeat.
 
-    Uses a small-model-optimized system prompt. The agent has access to
-    file-write, file-run, and bash-execution tools.
+    System prompt is built by ``build_deep_system_prompt()`` from
+    ``prompts.py`` — the single source of truth for all prompt text.
 
     Args:
         prompt: Task description.
@@ -226,17 +222,12 @@ def run_deep_agent(
 
     tools = [write_file, run_python_file, execute_bash_command]
 
-    task = (
-        f"{prompt}\n\n"
-        f"IMPORTANT: Follow these steps exactly:\n"
-        f"1. Use write_file(filename='{target_file}', content=<your code>) to save the script\n"
-        f"2. Use run_python_file(filename='{target_file}') to run it\n"
-        f"3. If there are errors, fix the code and write_file again, then run_python_file again\n"
-        f"4. When the script works correctly, call final_answer(result)"
-    )
+    # Build the system prompt — all text comes from prompts.py
+    system_prompt = build_deep_system_prompt(tools, target_file=target_file)
 
     return react_loop(
-        task=task,
+        system_prompt=system_prompt,
+        task=prompt,
         model=model,
         tools=tools,
         max_steps=max_steps,

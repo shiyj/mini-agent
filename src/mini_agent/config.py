@@ -31,21 +31,3 @@ def load_prompts(prompts_path: str | Path | None = None) -> dict:
 
     _prompts_cache = json.loads(path.read_text(encoding="utf-8"))
     return _prompts_cache
-
-
-def build_prompt(section: str, **kwargs: str) -> str:
-    """Build a prompt from the templates and fill placeholders.
-
-    Args:
-        section: Key in prompts.json, e.g. "fast_agent" / "deep_agent".
-        kwargs: Values to substitute into the template.
-
-    Returns:
-        The fully rendered prompt string.
-    """
-    prompts = load_prompts()
-    section_data = prompts.get(section, {})
-    template = section_data.get("user_template", "{prompt}")
-    context = dict(section_data)
-    context.update(kwargs)
-    return template.format(**context)
