@@ -18,6 +18,7 @@ from mini_agent import get_local_model, run_deep_agent
 DATA_DIR = Path(__file__).resolve().parent / "data"
 EXAMPLE_SRC = DATA_DIR / "modify_python.py.example"
 TARGET = DATA_DIR / "modify_python.py"
+LOG_FILE = DATA_DIR / "requests.jsonl"
 
 print("=" * 60)
 print("mini-agent  Fix Python Error Demo")
@@ -36,7 +37,7 @@ cleaned = re.sub(r"\n{3,}", "\n\n", stripped).strip() + "\n"
 TARGET.write_text(cleaned, encoding="utf-8")
 
 print("[2/3] Creating model ...")
-model = get_local_model("ornith:9b", temperature=0.4)
+model = get_local_model("ornith:9b", temperature=0.4, log_file=str(LOG_FILE))
 
 print("[3/3] Running deep agent ...")
 print("=" * 60)

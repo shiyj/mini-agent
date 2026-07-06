@@ -13,3 +13,4 @@ logs/
 .omo/
 .DS_Store
 examples/data/modify_python.py
+examples/data/requests.jsonl

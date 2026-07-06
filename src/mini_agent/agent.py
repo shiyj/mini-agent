@@ -41,6 +41,7 @@ def get_local_model(
     api_base: str = "http://localhost:11434",
     temperature: float = 0.0,
     max_output_tokens: int = 512,
+    log_file: str | None = None,
 ) -> ResponsesModel:
     """Create a model that talks to a ``/v1/responses`` endpoint.
 
@@ -51,6 +52,7 @@ def get_local_model(
         api_base: Server base URL.
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate.
+        log_file: Optional path to a JSONL file for request/response logging.
 
     Returns:
         A configured ``ResponsesModel``.
@@ -60,6 +62,7 @@ def get_local_model(
         api_base=api_base,
         temperature=temperature,
         max_output_tokens=max_output_tokens,
+        log_file=log_file,
     )
 
 

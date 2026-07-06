@@ -7,6 +7,7 @@ Supports both SSE streaming and non-streaming (bulk) modes.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 import httpx
@@ -72,6 +73,7 @@ class ResponsesModel:
         temperature: float = 0.0,
         max_output_tokens: int = 512,
         stream: bool = False,
+        log_file: str | None = None,
         **kwargs,
     ):
         self.model_name = model_name
@@ -80,6 +82,7 @@ class ResponsesModel:
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
         self.stream = stream
+        self.log_file = log_file
         self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
 
     # ------------------------------------------------------------------
@@ -170,13 +173,44 @@ class ResponsesModel:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _log(
+        self,
+        direction: str,
+        body: dict[str, Any],
+        response_data: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Append one JSONL entry to the log file (if configured)."""
+        if not self.log_file:
+            return
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "direction": direction,
+            "model": self.model_name,
+        }
+        if direction == "request":
+            entry["body"] = body
+        else:
+            if response_data is not None:
+                entry["response"] = response_data
+            if error is not None:
+                entry["error"] = error
+        try:
+            with open(self.log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass  # Silently ignore write failures — logging should never crash
+
     def _send_streaming(
         self, body: dict[str, Any]
     ) -> tuple[str, dict[str, Any]]:
         """Send a streaming request and collect output via SSE events."""
         output_text = ""
         usage_data: dict[str, Any] = {}
+        all_events: list[dict[str, Any]] = []
+        self._log("request", body)
         for event_type, data in self._iter_sse(body):
+            all_events.append({"event": event_type, "data": data})
             if event_type == "response.output_text.delta":
                 delta = data.get("delta", "")
                 if isinstance(delta, str):
@@ -186,6 +220,11 @@ class ResponsesModel:
                 usage_data = resp_data.get("usage", {})
                 if not output_text:
                     output_text = self._extract_output_text(resp_data)
+        self._log("response", body, response_data={
+            "events": all_events,
+            "output_text": output_text,
+            "usage": usage_data,
+        })
         return output_text, usage_data
 
     def _send_bulk(
@@ -195,9 +234,15 @@ class ResponsesModel:
         url = f"{self.api_base}/v1/responses"
         # Ensure stream is False for the actual request
         body["stream"] = False
+        self._log("request", body)
         resp = self._client.post(url, json=body)
-        resp.raise_for_status()
-        data = resp.json()
+        try:
+            resp.raise_for_status()
+            data = resp.json()
+            self._log("response", body, response_data=data)
+        except Exception as e:
+            self._log("response", body, error=str(e))
+            raise
         output_text = self._extract_output_text(data)
         usage_data = data.get("usage", {})
         return output_text, usage_data
