@@ -43,7 +43,7 @@ def _truncate_observation(text: str, max_length: int) -> str:
 def parse_code(text: str) -> str | None:
     """Extract Python code from the LLM's markdown output.
 
-    Strips <think>...</think> blocks (Qwen thinking mode) first.
+    Strips <think>...</think> blocks (Qwen/ornith thinking mode) first.
     Then extracts code blocks in order of preference:
     1. ```python / ```py — returned as-is (Python code)
     2. ```bash / ```sh / ```shell — converted to execute_bash_command() calls
@@ -52,17 +52,26 @@ def parse_code(text: str) -> str | None:
 
     Returns None if no usable code can be extracted.
     """
-    # Strip <think>...</think> blocks (Qwen/ornith thinking mode)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    # If only </think> is present (opening tag consumed by SSE), take everything after it
-    if "</think>" in text:
-        text = text.split("</think>", 1)[1]
+    # Strip special tokens and thinking blocks
+    text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|.*?\|>', '', text)
+    if ' thinking' in text:
+        text = re.sub(r" thinking.*? response", "", text, flags=re.DOTALL)
+    elif ' response' in text:
+        text = text.replace(' response', '')
 
     # 1. ```python / ```py — native Python code
     pattern_py = r"```(?:python|py)\s*\n(.*?)```"
     matches = re.findall(pattern_py, text, re.DOTALL)
     if matches:
         return "\n\n".join(m.strip() for m in matches)
+
+    # 1b. Unclosed ```python block (model ran out of tokens)
+    unclosed = re.search(r"```(?:python|py)\s*\n(.+)", text, re.DOTALL)
+    if unclosed:
+        code = unclosed.group(1).strip()
+        if code:
+            return code
 
     # 2. ```bash / ```sh / ```shell — convert to execute_bash_command() call
     pattern_bash = r"```(?:bash|sh|shell)\s*\n(.*?)```"
@@ -71,18 +80,34 @@ def parse_code(text: str) -> str | None:
         parts = []
         for block in matches:
             content = block.strip()
-            # Use repr() for safe quoting — handles any embedded quotes
             parts.append(
                 f'__result = execute_bash_command({repr(content)})\n'
                 f"print(__result)"
             )
         return "\n\n".join(parts)
 
+    # 2b. Unclosed ```bash block
+    unclosed_bash = re.search(r"```(?:bash|sh|shell)\s*\n(.+)", text, re.DOTALL)
+    if unclosed_bash:
+        content = unclosed_bash.group(1).strip()
+        if content:
+            return (
+                f'__result = execute_bash_command({repr(content)})\n'
+                f"print(__result)"
+            )
+
     # 3. Generic ``` ... ``` — no language tag, try as Python
     pattern_generic = r"```\s*\n(.*?)```"
     matches = re.findall(pattern_generic, text, re.DOTALL)
     if matches:
         return "\n\n".join(m.strip() for m in matches)
+
+    # 3b. Unclosed generic code block
+    unclosed_generic = re.search(r"```\s*\n(.+)", text, re.DOTALL)
+    if unclosed_generic:
+        code = unclosed_generic.group(1).strip()
+        if code:
+            return code
 
     # 4. Maybe the LLM outputted code directly without code fences
     try:
@@ -235,6 +260,19 @@ def react_loop(
             if verbose:
                 print(f"\n{'='*20} Done (final_answer) {'='*20}", file=sys.stderr)
             return str(result.output) if result.output is not None else result.logs
+
+        # 5a. Warn if code ran without write_file() — file on disk is NOT fixed
+        if not result.error and "write_file(" not in code and "def " in code:
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Warning: Your code ran but did NOT save changes to the file. "
+                    "Running code without write_file() does NOT fix the file on disk. "
+                    "Use write_file() to save the corrected code, then run_python_file() to test it."
+                ),
+            })
+            continue
 
         # 6. Add to conversation history
         messages.append({"role": "assistant", "content": output})
