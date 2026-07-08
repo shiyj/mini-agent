@@ -112,13 +112,15 @@ react_loop(task, model, tools, max_steps):
 - **工具使用示例：** 提示词中包含完整的 `write_file → run_python_file → final_answer` 代码示例。
 - **防重复指令：** "Never repeat working code"（防止模型不断重跑同一个脚本）。
 
-### 2. Code Parsing（三阶段回退）
+### 2. Code Parsing（四阶段回退）
 
 ```
-1. 剥离 <think>...</think>（Qwen thinking 产物）
-2. 匹配 ```python 代码块，合并多个块
-3. 回退：匹配 ``` 泛代码块
-4. 再回退：ast.parse() 直接解析未折叠文本
+0. 剥离特殊 token（<|mask_start|>、<|im_end|> 等 Ollama 产物）
+1. 剥离 <think>...</think> + 残留 </think>/<think>（Qwen thinking 产物）
+2. 匹配 ```python / ```py 代码块 + 未闭合兜底
+3. 回退：匹配 ```bash / ```sh / ```shell → 转为 execute_bash_command()
+4. 回退：匹配 ``` 泛代码块 + 未闭合兜底
+5. 再回退：ast.parse() 直接解析未折叠文本
 ```
 
 ### 3. 停止序列
@@ -134,6 +136,21 @@ react_loop(task, model, tools, max_steps):
 | `final_answer` 赋值不跨作用域 | `list[Any]` 可变容器 |
 | `exec()` 不捕获表达式返回值 | 工具自动 `print()` 返回值 |
 | 连续调用 `final_answer()` 覆盖值 | `got_final_answer[0] = True` 后不再修改 |
+
+### 5. 错误码机制（E001–E007）
+
+所有恢复提示集中在 `prompts.py` 的 `ERROR_PROMPTS` 字典中，运行时通过
+`format_error(code, target_file=..., var=...)` 注入为用户消息。系统提示词保持极短。
+
+| 错误码 | 触发时机 | 处理方式 |
+|--------|---------|---------|
+| E001 | `parse_code()` 返回 `None` | 注入 E001 用户消息，`continue` |
+| E002 | `final_answer()` + `wrote_file == False` | 注入 E002 用户消息，`continue` |
+| E003 | 代码只读文件（step ≥ 3） | 注入 E003 用户消息，`continue` |
+| E004 | 代码赋值修复内容到变数但未写文件 | 注入 E004（含变数名），`continue` |
+| E005 | 代码无写入动作（通用） | 注入 E005，`continue` |
+| E006 | 连续 3 次相同输出 | 前 2 次注入警告；第 3 次直接 `return` |
+| E007 | 连续 6 步无进度 | 直接 `return` |
 
 ---
 

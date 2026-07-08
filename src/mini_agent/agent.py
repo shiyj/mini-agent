@@ -45,6 +45,7 @@ def get_local_model(
     max_output_tokens: int = 4096,
     context_window: int = 65536,
     log_file: str | None = None,
+    reasoning: dict | None = None,
 ) -> ResponsesModel:
     """Create a model that talks to a ``/v1/responses`` endpoint.
 
@@ -70,6 +71,7 @@ def get_local_model(
         max_output_tokens=max_output_tokens,
         context_window=context_window,
         log_file=log_file,
+        reasoning=reasoning,
     )
 
 
@@ -245,6 +247,7 @@ def run_deep_agent(
         max_observation_length=max_observation_length,
         verbose=True,
         compressor=compressor,
+        target_file=target_file,
     )
 
 
@@ -254,6 +257,7 @@ def run_deep_agent_with_config(
     provider_name: str | None = None,
     target_file: str = "output.py",
     log_file: str | None = None,
+    reasoning: dict | None = None,
 ) -> str:
     """One-shot deep agent: load config, create model, build compressor, run.
 
@@ -278,6 +282,7 @@ def run_deep_agent_with_config(
         max_output_tokens=config["max_output_tokens"],
         context_window=config["context_window"],
         log_file=log_file,
+        reasoning=reasoning,
     )
 
     compressor_cfg = config.get("compressor", {})

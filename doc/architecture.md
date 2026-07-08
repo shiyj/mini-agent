@@ -39,9 +39,11 @@ ResponsesModel.__init__(
     temperature=0.4,
     max_output_tokens=512,
     stream=False,
+    reasoning=None,         # optional reasoning.effort
 )
     │
     ▼
+  api_base 自动移除末尾 "/v1"（兼容两种输入格式）
   存储参数，创建 httpx.Client(timeout=(connect=10s, total=180s))
 ```
 
@@ -56,10 +58,11 @@ model = ResponsesModel(model_name="ornith:9b", stream=False)
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `api_base` | `http://localhost:11434` | /v1/responses 端点地址 |
+| `api_base` | `http://localhost:11434` | 自动归一化（移除末尾 `/v1`） |
 | `stream` | `False` | 非流式模式，单次 POST 请求返回全部结果 |
 | `temperature` | `0.0` | 采样温度 |
 | `max_output_tokens` | `512` | 最大生成长度 |
+| `reasoning` | `None` | 可选，传入 `{"effort": "low"}` 等控制推理深度 |
 
 ---
 
@@ -185,17 +188,25 @@ output = response.content
 code = parse_code(output)
 ```
 
-三阶段回退解析：
+四阶段回退解析（含特殊 token 剥离 + 未闭合块兜底）：
 
 ```
 原始模型输出
     │
-    ├─ 剥离 <think>...</think>（Qwen 思考模式产物）
-    ├─ 剥离 </think> 及其之前内容（SSE 流已消费开始标签）
+    ├─ 剥离 <|mask_start|>...<|mask_end|> 等 Ollama 特殊 token
+    ├─ 剥离 <think>...</think> 及残留 </think>/<think> 标签
     │
-    ├─ 匹配 ```python ... ``` → 多个块用 \n\n 连接
-    ├─ 回退：匹配 ``` ... ```
+    ├─ 匹配 ```python/```py → 多个块用 \n\n 连接
+    ├─ 未闭合 ```python 兜底（模型被截断时）
+    │
+    ├─ 匹配 ```bash/```sh/```shell → 转为 execute_bash_command()
+    ├─ 未闭合 ```bash 兜底
+    │
+    ├─ 匹配 ``` ... ``` 泛代码块
+    ├─ 未闭合 ``` 兜底
+    │
     └─ 回退：ast.parse() 直接解析未折叠文本
+         → 全部失败返回 None → 触发 E001 恢复提示
 ```
 
 #### 第 3 步：执行代码
@@ -217,11 +228,29 @@ else:
         observation += f"\nLast output: {result.output}"
 ```
 
-#### 第 5 步：判断是否结束
+#### 第 5 步：检查最终答案 + 错误恢复
+
+当前实现在此过程中注入多个守卫和恢复提示（详见 `doc/react_loop_processing.md`）：
+
+```
+步骤间检测（按顺序）:
+  1. 循环检测 E006 — 连续 3 次相同输出 → 警告，第 3 次终止
+  2. 代码解析失败 E001 — 模型未输出有效代码块
+  3. 无进度守卫 E007 — 连续 6 步无 write/final_answer
+  4. final_answer 守卫 E002 — 调用 final_answer 但未写文件
+  5. 写入守卫 E003/E004/E005 — step ≥ 3 且未调用 write_file
+```
+
+所有恢复提示集中在 `prompts.py` 的 `ERROR_PROMPTS` 字典中，通过
+`format_error(code, target_file=..., var=...)` 注入为用户消息，
+保持系统提示词极短。详情见 `doc/react_loop_processing.md`。
 
 ```python
 if result.is_final_answer:
-    return str(result.output)    # ← 模型调用了 final_answer()
+    if not wrote_file:
+        # E002 — 注入恢复提示，continue 不终止
+        continue
+    return str(result.output)    # ← 模型正确调用了 final_answer()
 # 否则追加到 messages 继续循环
 messages.append({"role": "assistant", "content": output})
 messages.append({"role": "user", "content": f"Observation:\n{observation}"})
@@ -362,7 +391,10 @@ generate(messages, stop_sequences, ...)
     │        "stream": false
     │      }
     │
-    ├─ 4. _send_bulk(body)    ← stream=False
+    ├─ 4. 重试：如果响应文本为空，升温 0.25 后重试 1 次
+    │      （模型偶发空白输出的容错机制）
+    │
+    ├─ 5. _send_bulk(body)    ← stream=False
     │      httpx.post("/v1/responses", json=body)
     │             │
     │             ▼
@@ -370,10 +402,10 @@ generate(messages, stop_sequences, ...)
     │      → 遍历 output[].content[].output_text
     │      → 拼接为完整字符串
     │
-    ├─ 5. 应用 stop_sequences
+    ├─ 6. 应用 stop_sequences
     │      → 在第一个 ["Observation:"] 处截断
     │
-    └─ 6. 返回 ChatMessage(content, token_usage, ...)
+    └─ 7. 返回 ChatMessage(content, token_usage, ...)
 ```
 
 ### Responses API 格式
@@ -386,7 +418,8 @@ Ollama 的 `/v1/responses` 端点遵循 OpenAI Responses API 规范：
   "model": "ornith:9b",
   "input": [{"role": "user", "content": "..."}],
   "instructions": "System prompt",
-  "stream": false
+  "stream": false,
+  "reasoning": {"effort": "low"}    // 可选，控制推理深度
 }
 
 响应:

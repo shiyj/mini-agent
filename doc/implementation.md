@@ -149,6 +149,9 @@ final_answer(output)
 - **Responses API 格式**：使用 `instructions`（系统消息）+ `input`（对话历史）+ `stream`
 - **停止序列**：在输出上应用 `remove_content_after_stop_sequences`
 - **无 smolagents 继承**：`generate(messages, stop_sequences, ...)` 是独立的公共方法
+- **`reasoning` 参数**：支持 `reasoning.effort` 控制推理深度（`None`/`low`/`medium`/`high`）
+- **URL 自动归一化**：`api_base` 末尾的 `/v1` 自动移除，兼容两种输入格式
+- **空白重试**：响应文本为空时升温 0.25 重试 1 次，容纳模型偶发空白输出
 
 **SSE 事件处理：**
 
@@ -159,7 +162,7 @@ response.completed         → 提取 usage 数据，回退从 response.output �
 
 ### `agent.py` — Agent 实现
 
-**模型工厂：** `get_local_model()` 是可选便利函数，用户可直接构造 `ResponsesModel`。
+**模型工厂：** `get_local_model()` 是可选便利函数，用户可直接构造 `ResponsesModel`。新增 `reasoning` 参数可选传入 `{"effort": "low"}` 等控制模型推理深度。
 
 **三个工具函数：**
 

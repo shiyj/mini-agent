@@ -76,17 +76,23 @@ class ResponsesModel:
         context_window: int = 65536,
         stream: bool = False,
         log_file: str | None = None,
+        reasoning: dict[str, Any] | None = None,
         **kwargs,
     ):
         self.model_name = model_name
         self.model_id = model_name
-        self.api_base = api_base.rstrip("/")
+        # Normalize: accept baseURL with or without a trailing "/v1"
+        base = api_base.rstrip("/")
+        if base.lower().endswith("/v1"):
+            base = base[:-3]
+        self.api_base = base
         self.api_key = api_key
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
         self.context_window = context_window
         self.stream = stream
         self.log_file = log_file
+        self.reasoning = reasoning
         self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
 
     # ------------------------------------------------------------------
@@ -140,6 +146,8 @@ class ResponsesModel:
         }
         if instructions:
             body["instructions"] = instructions
+        if self.reasoning is not None:
+            body["reasoning"] = self.reasoning
 
         # 4. Response format (JSON mode etc.)
         if response_format:
@@ -148,11 +156,22 @@ class ResponsesModel:
         # 5. Merge extra kwargs
         body.update(kwargs)
 
-        # 6. Send request — streaming or bulk
-        if self.stream:
-            output_text, usage_data = self._send_streaming(body)
-        else:
-            output_text, usage_data = self._send_bulk(body)
+        # 6. Send request — retry on empty output (model-side hiccup)
+        max_attempts = 2
+        output_text = ""
+        usage_data: dict[str, Any] = {}
+        for attempt in range(max_attempts):
+            attempt_body = dict(body)
+            if attempt > 0:
+                # Bump temperature to break the model out of a blank response
+                base_t = attempt_body.get("temperature") or 0.0
+                attempt_body["temperature"] = min(1.0, base_t + 0.25 * attempt)
+            if self.stream:
+                output_text, usage_data = self._send_streaming(attempt_body)
+            else:
+                output_text, usage_data = self._send_bulk(attempt_body)
+            if output_text and output_text.strip():
+                break
 
         # 7. Apply stop sequences
         if stop_sequences and output_text:

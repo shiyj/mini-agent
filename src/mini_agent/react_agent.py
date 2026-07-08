@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from .code_executor import ExecutionResult, execute_code
 from .context import ContextCompressor
+from . import prompts
 from .tools import Tool
 from .types import (
     ChatMessage,
@@ -52,13 +53,12 @@ def parse_code(text: str) -> str | None:
 
     Returns None if no usable code can be extracted.
     """
-    # Strip special tokens and thinking blocks
+    # Strip special tokens
     text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|.*?\|>', '', text)
-    if ' thinking' in text:
-        text = re.sub(r" thinking.*? response", "", text, flags=re.DOTALL)
-    elif ' response' in text:
-        text = text.replace(' response', '')
+    # Strip leaked reasoning tags (model sometimes emits <think>...</think> inline)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = text.replace('</think>', '').replace('<think>', '')
 
     # 1. ```python / ```py — native Python code
     pattern_py = r"```(?:python|py)\s*\n(.*?)```"
@@ -129,6 +129,7 @@ def react_loop(
     max_observation_length: int = 2000,
     verbose: bool = True,
     compressor: ContextCompressor | None = None,
+    target_file: str = "output.py",
 ) -> str:
     """Run the ReAct loop until final_answer or max_steps.
 
@@ -141,6 +142,10 @@ def react_loop(
         max_observation_length: Max characters for observation content (0 = no truncation).
         verbose: If True, print step progress to stderr.
         compressor: Optional context compressor to bound conversation length.
+        target_file: Path of the file the agent is meant to create/fix. Passed
+            through so that recovery prompts (see ``prompts.ERROR_PROMPTS``) can
+            name the exact file the model must write to. Keeping it here avoids
+            baking the path into the (short, generic) system prompt.
 
     Returns:
         The final answer string, or an error message.
@@ -150,6 +155,10 @@ def react_loop(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
     ]
+    recent_outputs: list[str] = []
+    consecutive_loops = 0
+    wrote_file = False
+    no_progress = 0
 
     stop_sequences = ["Observation:"]
 
@@ -221,17 +230,33 @@ def react_loop(
         if verbose:
             print(f"Model output:\n{output[:500]}", file=sys.stderr)
 
-        # 2. Parse code from model output
-        code = parse_code(output)
-        if code is None:
-            # Model didn't produce valid code — tell it and retry
+        # 2a. Loop detection — repeated identical output means the model is stuck
+        recent_outputs.append(output)
+        if len(recent_outputs) >= 3 and recent_outputs[-1] == recent_outputs[-2] == recent_outputs[-3]:
+            consecutive_loops += 1
+            if consecutive_loops >= 3:
+                if verbose:
+                    print("[loop] Stuck after 2 warnings — stopping", file=sys.stderr)
+                return prompts.format_error(prompts.E006_LOOP, target_file=target_file)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": (
-                    "Error: No valid Python code block found. "
-                    "Please write your code in a ```python``` block and try again."
-                ),
+                "content": prompts.format_error(prompts.E006_LOOP, target_file=target_file),
+            })
+            if verbose:
+                print(f"[loop] Warning #{consecutive_loops} — identical output detected", file=sys.stderr)
+            continue
+        else:
+            consecutive_loops = 0
+
+        # 2. Parse code from model output
+        code = parse_code(output)
+        if code is None:
+            # Model didn't produce valid code — tell it (E001) and retry
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E001_NO_CODE),
             })
             continue
 
@@ -240,6 +265,31 @@ def react_loop(
             print(f"\nExecuting code:\n{code[:300]}", file=sys.stderr)
 
         result = execute_code(code, tools)
+
+        # 3a. Track whether a write_file() call actually executed and persisted
+        # the file. We check the execution logs (not just the source text) so that
+        # merely MENTIONING write_file (in a comment or malformed call) does not
+        # falsely count as progress.
+        if not result.error and result.logs and "Written" in result.logs:
+            wrote_file = True
+
+        # 3b. No-progress guard: if the model keeps producing steps that neither
+        # write, verify, nor finalize, it is stuck (e.g. re-defining functions
+        # without ever calling write_file). Stop early instead of burning steps.
+        # Verification (run_python_file/execute_bash_command) only counts as
+        # progress AFTER a write — running the still-buggy file is not progress.
+        verified = "run_python_file(" in code or "execute_bash_command(" in code
+        made_progress = wrote_file or result.is_final_answer
+        if verified and not wrote_file:
+            made_progress = False
+        if made_progress:
+            no_progress = 0
+        else:
+            no_progress += 1
+        if no_progress >= 6:
+            if verbose:
+                print("[no-progress] Stopping after 6 unproductive steps", file=sys.stderr)
+            return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=target_file)
 
         # 4. Build observation
         if result.error:
@@ -257,21 +307,56 @@ def react_loop(
 
         # 5. Check for final_answer
         if result.is_final_answer:
+            # Guard: a final_answer without ever calling write_file() means the
+            # fix lives only in exec() memory — the file on disk is still buggy.
+            if not wrote_file:
+                messages.append({"role": "assistant", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=target_file),
+                })
+                if verbose:
+                    print("[final_answer-warning] final_answer without write_file", file=sys.stderr)
+                continue
             if verbose:
                 print(f"\n{'='*20} Done (final_answer) {'='*20}", file=sys.stderr)
             return str(result.output) if result.output is not None else result.logs
 
-        # 5a. Warn if code ran without write_file() — file on disk is NOT fixed
-        if not result.error and "write_file(" not in code and "def " in code:
+        # 5a. Warn if code ran without write_file() — file on disk is NOT fixed.
+        # Only warn after step 2 (model should read first, then fix), and do NOT
+        # warn on verification steps (run_python_file / execute_bash_command) which
+        # legitimately don't write but confirm the fix. Pick ONE error code per
+        # situation (see prompts.ERROR_PROMPTS): E004 when corrected code was
+        # assigned to a variable, E003 when only read/printed, else E005.
+        if (not result.error
+                and "write_file(" not in code
+                and "run_python_file(" not in code
+                and "execute_bash_command(" not in code
+                and step >= 3):
+            read_only = ("open(" in code or ".read(" in code or "read()" in code) and "write_file(" not in code
+            # Detect the "assign fixed CODE to a variable but never write" pattern.
+            # Only treat as a fix variable if the assigned value looks like code
+            # (contains def/import/class/return), NOT plain data like DATA = """...""".
+            var = None
+            m = re.search(r'(\w+)\s*=\s*("""|\'\'\')', code)
+            if m:
+                val = code[m.end():m.end() + 300]
+                if re.search(r'\b(def |import |class |return |print\()', val):
+                    var = m.group(1)
+            if var:
+                code_key = prompts.E004_WRITE_VAR
+            elif read_only:
+                code_key = prompts.E003_WRITE_READONLY
+            else:
+                code_key = prompts.E005_WRITE_GENERIC
+            msg = prompts.format_error(code_key, target_file=target_file, var=var)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": (
-                    "Warning: Your code ran but did NOT save changes to the file. "
-                    "Running code without write_file() does NOT fix the file on disk. "
-                    "Use write_file() to save the corrected code, then run_python_file() to test it."
-                ),
+                "content": msg,
             })
+            if verbose:
+                print(f"\n[write_file-warning] {msg}", file=sys.stderr)
             continue
 
         # 6. Add to conversation history
