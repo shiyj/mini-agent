@@ -25,7 +25,7 @@ from mini_agent.model import ResponsesModel
 from mini_agent.react_agent import parse_code
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 EXAMPLE_SRC = BASE_DIR / "examples" / "data" / "modify_python.py.example"
 SKILL_DIR = Path(__file__).resolve().parent
 REPORT_FILE = SKILL_DIR / "INSPECTION_REPORT.md"
