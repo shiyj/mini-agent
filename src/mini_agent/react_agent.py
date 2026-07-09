@@ -41,6 +41,24 @@ def _truncate_observation(text: str, max_length: int) -> str:
     return text[:half] + f"\n... [truncated {len(text) - max_length} chars] ...\n" + text[-half:]
 
 
+def _log(verbose: bool, text: str, limit: int = 0) -> None:
+    """Emit a debug line to stderr only when ``verbose`` is True.
+
+    When ``limit`` > 0 and ``text`` exceeds it, the text is cut to
+    ``limit`` characters and a marker appended so the operator knows the
+    console view was truncated for display only. This never affects the
+    data fed to the model or written to the JSONL log.
+    """
+    if not verbose:
+        return
+    if limit > 0 and len(text) > limit:
+        text = text[:limit] + (
+            f"\n... [debug truncated: showing first {limit} of "
+            f"{len(text)} chars]"
+        )
+    print(text, file=sys.stderr)
+
+
 def parse_code(text: str) -> str | None:
     """Extract Python code from the LLM's markdown output.
 
@@ -162,31 +180,43 @@ def react_loop(
 
     stop_sequences = ["Observation:"]
 
+    # Debug: dump key config once at startup
+    _log(
+        verbose,
+        "ReAct config: "
+        f"model={getattr(model, 'model_name', model)!r}, "
+        f"max_steps={max_steps}, "
+        f"max_observation_length={max_observation_length}, "
+        f"target_file={target_file!r}, "
+        f"compressor={'on' if compressor is not None else 'off'}",
+    )
+
     for step in range(1, max_steps + 1):
-        if verbose:
-            print(f"\n{'='*20} Step {step} {'='*20}", file=sys.stderr)
+        _log(verbose, f"\n{'='*20} Step {step} {'='*20}")
 
         # 0. Compress context if a compressor is configured
         if compressor is not None:
             before = len(messages)
             messages = compressor.compress(messages, model)
-            if verbose and len(messages) < before:
-                print(
-                    f'[context] {before} -> {len(messages)} messages (compressed)',
-                    file=sys.stderr,
-                )
-        
+            _log(
+                verbose and len(messages) < before,
+                f'[context] {before} -> {len(messages)} messages (compressed)',
+            )
+
         # 0a. Token-based compress check (if compressor configured)
         if compressor is not None and hasattr(model, 'context_window') and hasattr(model, 'max_output_tokens'):
             # Character-based estimate: ~4 chars per token
             # Calculate current token estimate from all messages
             total_chars = sum(len(msg.get('content', '')) for msg in messages)
             estimated_tokens = total_chars // 4
-            
+
             max_input_tokens = model.context_window - model.max_output_tokens
             if estimated_tokens > max_input_tokens * 0.85:  # Buffer
-                if verbose:
-                    print(f'[token-check] Estimated {estimated_tokens} tokens exceeding {max_input_tokens} max, compressing', file=sys.stderr)
+                _log(
+                    verbose,
+                    f'[token-check] Estimated {estimated_tokens} tokens exceeding '
+                    f'{max_input_tokens} max, compressing',
+                )
                 before = len(messages)
                 # Keep only system, task, recent messages (force compress if needed)
                 # Re-use compressor with batch size increased to clear space
@@ -194,8 +224,10 @@ def react_loop(
                 setattr(compressor, 'compress_batch', len(messages))
                 messages = compressor.compress(messages, model)
                 setattr(compressor, 'compress_batch', old_keep)
-                if verbose and len(messages) < before:
-                    print(f'[token-compress] {before} -> {len(messages)} messages', file=sys.stderr)
+                _log(
+                    verbose and len(messages) < before,
+                    f'[token-compress] {before} -> {len(messages)} messages',
+                )
 
         # 1. Call the model
         cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
@@ -227,24 +259,21 @@ def react_loop(
         # Apply stop sequences
         output = remove_content_after_stop_sequences(output, stop_sequences) or output
 
-        if verbose:
-            print(f"Model output:\n{output[:500]}", file=sys.stderr)
+        _log(verbose, f"Model output:\n{output}", limit=500)
 
         # 2a. Loop detection — repeated identical output means the model is stuck
         recent_outputs.append(output)
         if len(recent_outputs) >= 3 and recent_outputs[-1] == recent_outputs[-2] == recent_outputs[-3]:
             consecutive_loops += 1
             if consecutive_loops >= 3:
-                if verbose:
-                    print("[loop] Stuck after 2 warnings — stopping", file=sys.stderr)
+                _log(verbose, "[loop] Stuck after 2 warnings — stopping")
                 return prompts.format_error(prompts.E006_LOOP, target_file=target_file)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
                 "content": prompts.format_error(prompts.E006_LOOP, target_file=target_file),
             })
-            if verbose:
-                print(f"[loop] Warning #{consecutive_loops} — identical output detected", file=sys.stderr)
+            _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
             continue
         else:
             consecutive_loops = 0
@@ -261,8 +290,7 @@ def react_loop(
             continue
 
         # 3. Execute the code
-        if verbose:
-            print(f"\nExecuting code:\n{code[:300]}", file=sys.stderr)
+        _log(verbose, f"\nExecuting code:\n{code}", limit=300)
 
         result = execute_code(code, tools)
 
@@ -287,8 +315,7 @@ def react_loop(
         else:
             no_progress += 1
         if no_progress >= 6:
-            if verbose:
-                print("[no-progress] Stopping after 6 unproductive steps", file=sys.stderr)
+            _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
             return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=target_file)
 
         # 4. Build observation
@@ -299,11 +326,13 @@ def react_loop(
             if result.output is not None:
                 observation += f"\nLast output: {result.output}"
 
-        if max_observation_length > 0:
+        # Exempt observations produced by read_file() from truncation — the
+        # model explicitly asked to see the whole file, so we must not hide
+        # the middle (where bugs usually live) behind a head/tail cut.
+        if max_observation_length > 0 and "read_file" not in result.tool_calls:
             observation = _truncate_observation(observation, max_observation_length)
 
-        if verbose:
-            print(f"\nObservation:\n{observation[:500]}", file=sys.stderr)
+        _log(verbose, f"\nObservation:\n{observation}", limit=500)
 
         # 5. Check for final_answer
         if result.is_final_answer:
@@ -315,11 +344,9 @@ def react_loop(
                     "role": "user",
                     "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=target_file),
                 })
-                if verbose:
-                    print("[final_answer-warning] final_answer without write_file", file=sys.stderr)
+                _log(verbose, "[final_answer-warning] final_answer without write_file")
                 continue
-            if verbose:
-                print(f"\n{'='*20} Done (final_answer) {'='*20}", file=sys.stderr)
+            _log(verbose, f"\n{'='*20} Done (final_answer) {'='*20}")
             return str(result.output) if result.output is not None else result.logs
 
         # 5a. Warn if code ran without write_file() — file on disk is NOT fixed.
@@ -355,8 +382,7 @@ def react_loop(
                 "role": "user",
                 "content": msg,
             })
-            if verbose:
-                print(f"\n[write_file-warning] {msg}", file=sys.stderr)
+            _log(verbose, f"\n[write_file-warning] {msg}")
             continue
 
         # 6. Add to conversation history
@@ -364,8 +390,7 @@ def react_loop(
         messages.append({"role": "user", "content": f"Observation:\n{observation}"})
 
     # Max steps reached — try to extract a reasonable answer from last output
-    if verbose:
-        print(f"\n{'='*20} Max steps reached {'='*20}", file=sys.stderr)
+    _log(verbose, f"\n{'='*20} Max steps reached {'='*20}")
 
     # Last resort: return the last observation
     if messages and messages[-1].get("role") == "user":

@@ -7,7 +7,7 @@
           "context_window": 65536,
           "max_output_tokens": 4096,
           "max_steps": 8,
-          "max_observation_length": 3000,
+          "max_observation_length": 8000,
           "compressor": {
             "max_messages": 25,
             "compress_batch": 8,

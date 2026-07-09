@@ -164,6 +164,7 @@ def run_one(round_id: int, segment_dir: Path, temperature: float) -> dict:
             model=model,
             target_file=str(target),
             max_steps=10,
+            max_observation_length=8000,
         )
         result["success"] = True
         result["final_answer"] = agent_result is not None

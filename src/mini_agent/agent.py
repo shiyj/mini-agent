@@ -80,6 +80,27 @@ def get_local_model(
 # ---------------------------------------------------------------------------
 
 @tool
+def read_file(filename: str) -> str:
+    """Read and return the full text content of a file on disk.
+
+    Use this (instead of cat/print) to inspect an existing file. The content
+    is returned in full and is NOT truncated, even for large files, so you can
+    see the complete script including the middle sections.
+
+    Args:
+        filename: Path to the file to read.
+
+    Returns:
+        The complete file content, or an error message.
+    """
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading {filename}: {e}"
+
+
+@tool
 def write_file(filename: str, content: str) -> str:
     """Write text content to a file on disk.
 
@@ -233,7 +254,7 @@ def run_deep_agent(
     Returns:
         The final agent output after all iterations.
     """
-    tools = [write_file, run_python_file, execute_bash_command]
+    tools = [write_file, run_python_file, execute_bash_command, read_file]
 
     # Build the system prompt — all text comes from prompts.py
     system_prompt = build_deep_system_prompt(tools, target_file=target_file)

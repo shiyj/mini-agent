@@ -117,6 +117,7 @@ def build_deep_system_prompt(
         ## Rules
         - Write Python code in ```python``` blocks
         - ALWAYS use write_file() to save scripts
+        - Use read_file() to inspect existing files — its output is NEVER truncated, so you see the whole file
         - Tool results are automatically printed — no need to call print() yourself
         - When code runs successfully, call final_answer() right away
         - Do NOT re-run the same code multiple times

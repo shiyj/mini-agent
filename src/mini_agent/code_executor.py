@@ -24,11 +24,13 @@ class ExecutionResult:
         logs: str,
         is_final_answer: bool,
         error: str | None = None,
+        tool_calls: list[str] | None = None,
     ):
         self.output = output
         self.logs = logs
         self.is_final_answer = is_final_answer
         self.error = error
+        self.tool_calls = tool_calls or []
 
     def __repr__(self) -> str:
         return f"ExecutionResult(output={self.output!r}, is_final_answer={self.is_final_answer}, error={self.error!r})"
@@ -67,12 +69,17 @@ def execute_code(
     # so that imports and function definitions share the same namespace
     exec_ns: dict[str, Any] = {"__name__": "__main__", "__builtins__": __builtins__}
 
+    # Track which tools were invoked this execution (used to decide whether
+    # the resulting observation may be exempt from truncation, e.g. read_file).
+    called: list[str] = []
+
     # Inject tools into the execution namespace with auto-print
     # so tool return values are always visible in the logs,
     # regardless of whether the model remembers to print().
     for t in tools:
         def _make_wrapper(tool: Tool):
             def _wrapper(*args, **kwargs):
+                called.append(tool.name)
                 result = tool(*args, **kwargs)
                 if result is not None:
                     print(result)
@@ -99,6 +106,7 @@ def execute_code(
             logs=logs,
             is_final_answer=got_final_answer[0],
             error=f"{type(e).__name__}: {e}\n{tb}",
+            tool_calls=called,
         )
     finally:
         sys.stdout = old_stdout
@@ -117,4 +125,5 @@ def execute_code(
         logs=logs,
         is_final_answer=got_final_answer[0],
         error=None,
+        tool_calls=called,
     )
