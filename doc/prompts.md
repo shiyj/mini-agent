@@ -15,11 +15,12 @@ prefill 配置（`FAST_AGENT_PREFILL` / `FAST_AGENT_PREFILL_TEXT`）也定义在
 
 ## 深思流系统提示词
 
-`build_deep_system_prompt(tools, target_file)` 动态构建，约 30 行，包含：
+`build_deep_system_prompt(tools, target_file)` 动态构建，约 35 行，包含：
 
-- **Workflow**：read_file → ````file:path` 写文件 → ````python` 运行 → final_answer
+- **Workflow**：read_file → ````file:path`/````edit:path` 写文件 → ````python` 运行 → final_answer
 - **Rules**：先写文件再执行、仅第一个代码块运行、工具自动打印、成功后立即 final_answer
 - **How to write a file**：````file:path` 零转义示例
+- **Precise editing**：````edit:path` 哈希锚点编辑（replace/insert_before/insert_after/delete）
 - **Tools**：由 `Tool.to_prompt()` 动态生成签名列表
 - **Important**：必须保存文件、必须验证、必须 final_answer
 
@@ -42,7 +43,7 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 
 ---
 
-## 错误码速查表 (E001–E008)
+## 错误码速查表 (E001–E009)
 
 | 代码 | 触发条件 | 关键提示内容 |
 |------|---------|-------------|
@@ -54,12 +55,13 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 | **E006** | 连续 3 次相同输出 | 要求停止循环，立即 ````file:path` + run_python_file + final_answer |
 | **E007** | 连续 6 步无进度 | 要求保存文件到磁盘 |
 | **E008** | 模型代码 SyntaxError | 引导用 ````file:path` 零转义写文件，避免字符串嵌套 |
+| **E009** | ````edit:path` 锚点过期 | 要求重新 `read_file()` 获取新鲜锚点后重试 |
 
 ---
 
 ## 进度判定关键点
 
-- `wrote_file = True`：本步写入了 ````file:```/````python:```/````bash:``` 块，**或**调用了 `write_file` 工具
+- `wrote_file = True`：本步写入了 ````file:```/````edit:```/````python:```/````bash:``` 块，**或**调用了 `write_file` 工具
 - `verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls`
 - `made_progress = wrote_this_step or verified or is_final_answer`
 - 验证**仅在已写文件后**算进度（防止反复跑有 bug 文件）

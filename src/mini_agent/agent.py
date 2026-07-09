@@ -23,6 +23,7 @@ from .config import load_agent_config
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT, build_deep_system_prompt
+from .hashline import tag_lines
 from .react_agent import react_loop
 from .tools import Tool, tool
 from .types import (
@@ -80,24 +81,43 @@ def get_local_model(
 # ---------------------------------------------------------------------------
 
 @tool
-def read_file(filename: str) -> str:
-    """Read and return the full text content of a file on disk.
+def read_file(filename: str, raw: bool = False, offset: int = 0, limit: int = 0) -> str:
+    """Read a file and return its content with hash-anchored line tags.
 
-    Use this (instead of cat/print) to inspect an existing file. The content
-    is returned in full and is NOT truncated, even for large files, so you can
-    see the complete script including the middle sections.
+    Each line is prefixed with ``LINE#HASH `` so you can reference specific
+    lines in an `````edit:path``` block. Set ``raw=True`` to get plain content
+    without tags. Use ``offset`` (1-indexed) and ``limit`` to read a range.
 
     Args:
         filename: Path to the file to read.
+        raw: If True, return plain content without line tags.
+        offset: Starting line number (1-indexed, 0 = start of file).
+        limit: Max lines to return (0 = all lines).
 
     Returns:
-        The complete file content, or an error message.
+        The file content (tagged by default), or an error message.
     """
     try:
         with open(filename, "r", encoding="utf-8") as f:
-            return f.read()
+            text = f.read()
     except Exception as e:
         return f"Error reading {filename}: {e}"
+
+    if raw:
+        if offset > 0 or limit > 0:
+            lines = text.split("\n")
+            lo = max(0, offset - 1) if offset > 0 else 0
+            hi = lo + limit if limit > 0 else len(lines)
+            return "\n".join(lines[lo:hi])
+        return text
+
+    tagged = tag_lines(text)
+    if offset > 0 or limit > 0:
+        lines = tagged.split("\n")
+        lo = max(0, offset - 1) if offset > 0 else 0
+        hi = lo + limit if limit > 0 else len(lines)
+        return "\n".join(lines[lo:hi])
+    return tagged
 
 
 @tool

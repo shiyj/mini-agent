@@ -46,13 +46,16 @@ for step in 1..max_steps:
   3. parse_step(output) → blocks
      空列表 → E001 → continue
 
-  4. write_blocks(blocks, step, target_file)
-     所有 ```lang[:path]``` 块写入磁盘
-     wrote_this_step = True/False
+   4. write_blocks(blocks, step, target_file)
+      所有 ```lang[:path]``` 块写入磁盘
+      ```edit:path``` 块 → 哈希锚点编辑（校验锚点、自底向上应用）
+      wrote_this_step, edit_reports = write_blocks(...)
+      锚点过期 (E_STALE_ANCHOR) → E009 → continue
 
-  5. 执行第一个可执行块
-     遍历 blocks，首个 lang in {python,py,bash,sh,shell} → exec_code
-     无可执行块 → E001 → continue
+   5. 执行第一个可执行块
+      遍历 blocks，首个 lang in {python,py,bash,sh,shell} → exec_code
+      无可执行块但有 edit_reports → 作为 edit-only step 继续
+      无可执行块且无 edit_reports → E001 → continue
 
      result = execute_code(exec_code, tools)
 
@@ -68,10 +71,11 @@ for step in 1..max_steps:
      if verified and not wrote_file: made_progress = False
      连续 6 步无进度 → E007 → return
 
-  6. 构建 Observation
-     error → "Execution logs + Error"
-     success → "Execution logs + Last output"
-     read_file 调用时不截断
+   6. 构建 Observation
+      edit_reports 前置（成功/新鲜锚点/过期锚点）
+      error → "Execution logs + Error"
+      success → "Execution logs + Last output"
+      read_file 调用时不截断
 
   7. final_answer 检查
      if result.is_final_answer:
@@ -121,7 +125,7 @@ r"```([A-Za-z0-9_-]+)(?::([^\n]+))?\s*\n(.*?)(?:```|$)"
 
 ---
 
-## write_blocks(blocks, step, target_file, verbose) → bool
+## write_blocks(blocks, step, target_file, verbose) → (bool, list[str])
 
 ```python
 def write_blocks(
@@ -129,12 +133,19 @@ def write_blocks(
     step: int,
     target_file: str,
     verbose: bool = False,
-) -> bool:
+) -> tuple[bool, list[str]]:
 ```
 
 **逻辑：**
 ```python
 for lang, path, content in blocks:
+    if lang == "edit":
+        # 哈希锚点编辑（校验锚点 → 自底向上应用 → 原子写）
+        result = apply_edit_block(full_path, content)
+        edit_reports.append(result)
+        wrote_any = True
+        continue
+
     if path is None:
         if lang in EXECUTABLE_LANGS:
             ext = "py" if lang in {"python","py"} else "sh"
@@ -149,7 +160,7 @@ for lang, path, content in blocks:
     wrote_any = True
 ```
 
-**返回：** 是否写入了至少一个文件。
+**返回：** `(wrote_any, edit_reports)` — 是否写入了至少一个文件，以及编辑块的结果列表（成功报告或 `[E_STALE_ANCHOR]`）。
 
 ---
 

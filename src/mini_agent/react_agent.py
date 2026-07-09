@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from .code_executor import ExecutionResult, execute_code
 from .context import ContextCompressor
+from .hashline import apply_edit_block
 from . import prompts
 from .tools import Tool
 from .types import (
@@ -92,10 +93,11 @@ def write_blocks(
     step: int,
     target_file: str,
     verbose: bool = False,
-) -> bool:
+) -> tuple[bool, list[str]]:
     """Write all blocks to disk.
 
     - ``file:path`` (or any non-executable lang) → write raw content to path.
+    - ``edit:path`` → apply hash-anchored edits to the file on disk.
     - ``python:path`` / ``bash:path`` / ``sh:path`` / ``shell:path`` → write
       content to path (also executable).
     - ``python`` / ``bash`` / ``sh`` / ``shell`` without path → write to
@@ -103,12 +105,28 @@ def write_blocks(
     - All paths resolved relative to CWD; parent dirs created.
 
     Returns:
-        True if at least one block was written, False otherwise.
+        (wrote_any, edit_reports) — ``wrote_any`` is True if at least one block
+        was written/edited; ``edit_reports`` is a list of result strings from
+        edit blocks (success or stale-anchor errors).
     """
     wrote_any = False
+    edit_reports: list[str] = []
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
+        if lang == "edit":
+            if path is None:
+                if verbose:
+                    print("[write_blocks] Skipping edit block without path", file=sys.stderr)
+                continue
+            full_path = os.path.abspath(path)
+            result = apply_edit_block(full_path, content)
+            edit_reports.append(result)
+            wrote_any = True
+            if verbose:
+                print(f"[write_blocks] Edited {full_path}: {result[:120]}", file=sys.stderr)
+            continue
+
         if path is None:
             if lang in _EXECUTABLE_LANGS:
                 # Save executable blocks without path to temp for record
@@ -123,9 +141,6 @@ def write_blocks(
         # Resolve path relative to CWD
         full_path = os.path.abspath(path)
 
-        # Safety: don't escape project root if possible (best-effort)
-        # Not strictly enforced for local dev agent.
-
         try:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as f:
@@ -137,7 +152,7 @@ def write_blocks(
             if verbose:
                 print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
 
-    return wrote_any
+    return wrote_any, edit_reports
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -304,9 +319,20 @@ def react_loop(
             continue
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step = write_blocks(blocks, step, target_file, verbose)
+        wrote_this_step, edit_reports = write_blocks(blocks, step, target_file, verbose)
         if wrote_this_step:
             wrote_file = True
+
+        # 3a. Stale anchor detection — if any edit block hit a hash mismatch,
+        # inject E009 recovery prompt and retry
+        stale = [r for r in edit_reports if r.startswith("[E_STALE_ANCHOR]")]
+        if stale:
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, target_file=target_file),
+            })
+            continue
 
         # 4. Find the FIRST executable block (python/bash/sh/shell) to run
         exec_code = None
@@ -318,8 +344,13 @@ def react_loop(
                 break
 
         if exec_code is None:
-            # No executable block — we wrote files but have nothing to run.
-            # Nudge the model to include a python/bash block (even just final_answer).
+            if edit_reports:
+                # Edit-only step — surface edit results as observation
+                observation = "\n".join(edit_reports)
+                messages.append({"role": "assistant", "content": output})
+                messages.append({"role": "user", "content": f"Observation:\n{observation}"})
+                continue
+            # No executable block — nudge the model to include one
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
@@ -369,12 +400,16 @@ def react_loop(
             return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=target_file)
 
         # 6. Build observation
+        parts: list[str] = []
+        if edit_reports:
+            parts.extend(edit_reports)
         if result.error:
-            observation = f"Execution logs:\n{result.logs}\nError:\n{result.error}"
+            parts.append(f"Execution logs:\n{result.logs}\nError:\n{result.error}")
         else:
-            observation = f"Execution logs:\n{result.logs}"
+            parts.append(f"Execution logs:\n{result.logs}")
             if result.output is not None:
-                observation += f"\nLast output: {result.output}"
+                parts.append(f"Last output: {result.output}")
+        observation = "\n".join(parts)
 
         # Exempt observations produced by read_file() from truncation — the
         # model explicitly asked to see the whole file, so we must not hide

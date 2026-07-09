@@ -7,6 +7,8 @@ types.py         ← 纯数据类型，被所有模块依赖
     ↑
 tools.py         ← Tool 抽象，被 agent / react_agent / code_executor 依赖
     ↑
+hashline.py      ← 哈希锚点编辑引擎，被 react_agent 依赖
+    ↑
 config.py        ← 配置加载，被 agent 依赖
     ↑
 prompts.py       ← 系统提示词，被 react_agent 依赖
@@ -44,7 +46,7 @@ run_fast_agent(prompt, model)
 run_deep_agent(prompt, model, target_file, max_steps)
     │
     ├─ model.max_output_tokens = max(512, 4096)
-    ├─ tools = [write_file, run_python_file, execute_bash_command, read_file]
+    ├─ tools = [read_file, write_file, run_python_file, execute_bash_command]
     ├─ task = prompt + "IMPORTANT: Follow these steps..."
     └─ react_loop(task, model, tools, max_steps, target_file)
            │
@@ -52,11 +54,12 @@ run_deep_agent(prompt, model, target_file, max_steps)
            ├─ messages = [system, user_task]
            ├─ for step in 1..max_steps:
            │     ├─ model.generate(messages, stop_sequences=["Observation:"])
-           │     ├─ parse_step(output) → [(lang, path, content), ...]
-           │     ├─ write_blocks(blocks) → 所有文件先写入磁盘
-           │     ├─ 取首个 lang in {python,py,bash,sh,shell} → exec_code
-           │     ├─ execute_code(exec_code, tools) → ExecutionResult
-           │     ├─ 错误恢复: E001/E002/E003/E004/E005/E006/E007/E008
+             │     ├─ parse_step(output) → [(lang, path, content), ...]
+             │     ├─ write_blocks(blocks) → 文件写入 + edit 块落盘
+             │     ├─ 锚点过期 → E009 (edit 块哈希校验失败)
+             │     ├─ 取首个 lang in {python,py,bash,sh,shell} → exec_code
+             │     ├─ execute_code(exec_code, tools) → ExecutionResult
+             │     ├─ 错误恢复: E001–E009
            │     ├─ final_answer 检查 → 返回或继续
            │     └─ messages.append(Observation) → 继续循环
            └─ return final_answer 或 fallback
@@ -72,6 +75,7 @@ run_deep_agent(prompt, model, target_file, max_steps)
 | 安全边界 | 子进程工具 (`run_python_file`, `bash`) | 真正隔离在子进程，exec 层完全开放 |
 | final_answer 跨作用域 | `list[Any]` 可变容器 | exec 内赋值默认局部作用域，list 绕过 |
 | 文件写入 | Markdown ````file:path` 零转义 | 9B 模型无法处理引号/转义嵌套 |
+| 精准编辑 | ````edit:path` 哈希锚点块 | 行级编辑避免整文件重写，上下文哈希防错行 |
 | 执行顺序 | 先写所有文件，再执行首个代码块 | 保证依赖文件就绪，模拟真实开发流程 |
 | 停止序列 | `"Observation:"` | 防止模型在同一轮生成下一轮前缀 |
 | 解析器唯一性 | 单一 `parse_step()` 服务活循环 + 日志分析 | 删除 `parse_code()`，避免重复与不一致 |
@@ -87,11 +91,12 @@ Step N
   │
   ├─ Model Generate
   │      │
-  │      ├─ Parse Step → Blocks
-  │      │       │
-  │      │       └─ write_blocks() → All files on disk
-  │      │
-  │      └─ Execute First Executable Block
+      │      ├─ Parse Step → Blocks
+      │      │       │
+      │      │       ├─ write_blocks() → All files + edit blocks on disk
+      │      │       └─ Stale anchor? → E009
+      │      │
+      │      └─ Execute First Executable Block
   │             │
   │             ├─ SyntaxError → E008 (max 3)
   │             ├─ final_answer?
@@ -119,6 +124,7 @@ Step N
 | 文件 | 行数 | 说明 |
 |------|------|------|
 | `types.py` | ~80 | 纯数据类型 |
+| `hashline.py` | ~180 | 上下文哈希 + 哈希锚点编辑引擎 |
 | `tools.py` | ~120 | Tool 抽象 + 4 内置工具 |
 | `code_executor.py` | ~120 | exec() 执行引擎 |
 | `react_agent.py` | ~450 | ReAct 循环核心 |

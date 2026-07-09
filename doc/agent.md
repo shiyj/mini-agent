@@ -21,8 +21,8 @@ from mini_agent import (
     run_deep_agent_with_config,
 
     # 工具（如需自定义）
-    write_file,
     read_file,
+    write_file,
     run_python_file,
     execute_bash_command,
 
@@ -151,10 +151,12 @@ def run_deep_agent_with_config(
 
 | 工具 | 签名 | 说明 |
 |------|------|------|
-| `read_file` | `read_file(filename: str) -> str` | 读取文件全文返回，**永不截断**（模型显式请求看完整文件） |
-| `write_file` | `write_file(filename: str, content: str) -> str` | 进程内写文件，返回 `"Written N bytes to ..."` |
-| `run_python_file` | `run_python_file(filename: str) -> str` | `subprocess.run(["python3", filename], timeout=30)` 捕获 stdout/stderr |
-| `execute_bash_command` | `execute_bash_command(command: str) -> str` | `subprocess.run(command, shell=True, timeout=30)` |
+| `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 默认每行带 `N#HHHH` 哈希标签；`raw=True` 返回纯文本；`offset`/`limit` 读取范围 |
+| `write_file` | `write_file(filename, content) -> str` | 进程内写文件，返回 `"Written N bytes to ..."` |
+| `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename], timeout=30)` 捕获 stdout/stderr |
+| `execute_bash_command` | `execute_bash_command(command) -> str` | `subprocess.run(command, shell=True, timeout=30)` |
+
+**精准编辑**通过 ````edit:path``` Markdown 块实现（非 Python 工具），见 `doc/tools.md`。
 
 **安全边界：** `read_file` / `write_file` 本地 I/O 无需隔离；运行脚本、Shell 命令走子进程，30s 超时。
 

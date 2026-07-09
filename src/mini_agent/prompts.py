@@ -41,6 +41,7 @@ E005_WRITE_GENERIC = "E005_WRITE_GENERIC"
 E006_LOOP = "E006_LOOP"
 E007_NO_PROGRESS = "E007_NO_PROGRESS"
 E008_SYNTAX = "E008_SYNTAX"
+E009_STALE_ANCHOR = "E009_STALE_ANCHOR"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
@@ -89,6 +90,12 @@ ERROR_PROMPTS = {
         "Warning E007: Stuck — no progress toward fixing the file (no file write/run "
         "in 6 consecutive steps). You must save the corrected content to disk using a "
         "```file:{target_file}``` block or write_file()."
+    ),
+    # E009: hash-anchored edit failed because the file changed since read
+    "E009_STALE_ANCHOR": (
+        "Error E009: Hash-anchored edit failed — the file changed since your "
+        "last read_file(). Call read_file('{target_file}') to get fresh "
+        "anchors, then retry with an ```edit:{target_file}``` block."
     ),
     # E008: the model's OWN generated code failed to compile (SyntaxError),
     # almost always a quote/escape conflict from embedding a whole file
@@ -140,13 +147,14 @@ def build_deep_system_prompt(
         ## Workflow
         1. Read the file with read_file() if needed
         2. Write the corrected file using a ```file:{target_file}``` block (raw content, no escaping)
+           OR edit specific lines with an ```edit:path``` block (see below)
         3. Run it with run_python_file() in a ```python``` block
         4. When it works, call final_answer(result) in the SAME ```python``` block
 
         ## Rules
         - Write Python/bash code in ```python``` or ```bash``` blocks
         - **CRITICAL**: To write a file, use a ```file:path``` block with RAW content (no quotes, no escaping).
-        - All ```file:``` blocks are written to disk FIRST, then your first ```python```/```bash``` block runs.
+        - All ```file:```/```edit:``` blocks are written to disk FIRST, then your first ```python```/```bash``` block runs.
         - ONLY THE FIRST ```python```/```bash``` block is executed.
         - ```python:path```/```bash:path``` blocks are also saved to `path` (or /tmp/mini-agent-*.py if no path).
         - Tool results are automatically printed — no need to call print() yourself.
@@ -170,11 +178,23 @@ def build_deep_system_prompt(
           final_answer("Fixed")
           ```
 
+        ## Precise editing (hash-anchored)
+        - read_file('path') returns lines tagged with ``LINE#HASH``, e.g. ``12#a3f4 print(x)``.
+        - To edit specific lines precisely, use an ```edit:path``` block:
+          ```edit:path/to/file.py
+          replace 12#a3f4 print(y)
+          insert_after 15#9abc new_line()
+          delete 20#def0
+          ```
+        - Operations: replace, insert_before, insert_after, delete.
+        - One edit per line; copy the ``N#HHHH`` anchor directly from read_file output.
+        - After editing, use ```python``` with run_python_file() to verify.
+
         ## Tools
         {tool_list}
 
         ## Important
-        - ALWAYS save the file first (```file:path``` or write_file())
+        - ALWAYS save the file first (```file:path```/```edit:path``` or write_file())
         - ALWAYS run the saved file with run_python_file() to verify
         - ALWAYS call final_answer() when your code works
         - Never repeat working code

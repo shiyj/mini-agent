@@ -9,6 +9,7 @@ ReAct architecture with two depths:
 
 from .agent import (
     get_local_model,
+    read_file,
     write_file,
     run_python_file,
     execute_bash_command,
@@ -25,6 +26,7 @@ from .types import ChatMessage, MessageRole, TokenUsage
 __all__ = [
     "get_local_model",
     "ResponsesModel",
+    "read_file",
     "write_file",
     "run_python_file",
     "execute_bash_command",
