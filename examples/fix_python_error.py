@@ -14,7 +14,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mini_agent import get_local_model, run_deep_agent, SummaryCompressor
+from mini_agent import run_deep_agent_with_config
 
 # Work under examples/data/ so the agent edits scripts in a clean directory
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -55,20 +55,23 @@ stripped = "\n".join(
 cleaned = re.sub(r"\n{3,}", "\n\n", stripped).strip() + "\n"
 TARGET.write_text(cleaned, encoding="utf-8")
 
-print("[2/3] Creating model ...")
-model = get_local_model("ornith:9b", temperature=0.4, log_file=str(LOG_FILE))
-
+print("[2/3] Loading model config from config/agents.json ...")
 print("[3/3] Running deep agent ...")
 print("=" * 60)
 
 # The agent receives just one sentence — it reads, fixes, runs, and verifies autonomously
 TASK = f"modify_python.py cannot run, find the problem and fix it."
 
-result = run_deep_agent(
+# Model, base URL, context window, max_steps, observation length and the
+# compressor are all resolved from config/agents.json (entry "ornith:9b"
+# under provider "ollama-local"). provider_name disambiguates when the
+# same model name exists under more than one provider.
+result = run_deep_agent_with_config(
     prompt=TASK,
-    model=model,
+    model_name="ornith:9b",
+    provider_name="ollama-local",
     target_file=str(TARGET),
-    max_steps=10
+    log_file=str(LOG_FILE),
 )
 
 print("=" * 60)

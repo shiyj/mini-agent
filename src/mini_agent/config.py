@@ -123,6 +123,15 @@ def load_agent_config(
         result["provider_name"] = provider_name or ""
         return result
 
+    # Refuse to silently pick the wrong provider when the model name is
+    # ambiguous and no provider_name was supplied to disambiguate.
+    if len(matched_providers) > 1 and provider_name is None:
+        names = ", ".join(p for p, _ in matched_providers)
+        raise ValueError(
+            f"Model '{model_name}' is defined under multiple providers "
+            f"({names}); pass provider_name= to disambiguate."
+        )
+
     # Use the first match (or the only one scoped by provider_name)
     p_name, p_cfg = matched_providers[0]
 
