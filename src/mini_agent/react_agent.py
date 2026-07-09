@@ -2,10 +2,11 @@
 
 Implements the core Thought → Code → Observation cycle:
 1. Send system prompt + task + conversation history to the model
-2. Parse the model's response for code blocks
-3. Execute the code with injected tools
-4. Feed the observation back to the model
-5. Repeat until final_answer() is called or max_steps reached
+2. Parse the model's response for markdown blocks
+3. Write all ```file:path```/```python:path```/```bash:path``` blocks to disk
+4. Execute the FIRST ```python```/```bash``` block with injected tools
+5. Feed the observation back to the model
+6. Repeat until final_answer() is called or max_steps reached
 
 Designed for small models (9B): minimal prompt, explicit stop conditions,
 no planning phase.
@@ -13,8 +14,10 @@ no planning phase.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
+import time
 from typing import TYPE_CHECKING
 
 from .code_executor import ExecutionResult, execute_code
@@ -33,6 +36,110 @@ if TYPE_CHECKING:
     from .model import ResponsesModel
 
 
+# ---------------------------------------------------------------------------
+# Block parsing
+# ---------------------------------------------------------------------------
+
+# Languages whose block content is executed (as opposed to written to disk).
+_EXECUTABLE_LANGS = {"python", "py", "bash", "sh", "shell"}
+
+
+def parse_step(text: str) -> list[tuple[str, str | None, str]]:
+    """Parse one model turn into a list of (lang, path, content) blocks.
+
+    Recognizes fenced blocks of the form:
+        ```lang
+        content
+        ```
+        ```lang:path
+        content
+        ```
+
+    - lang can be any identifier (file, python, py, bash, sh, shell, etc.)
+    - path is optional; if absent for python/bash/sh/shell, the block is saved
+      to a temp file /tmp/mini-agent-{timestamp}-{step}.py for record.
+    - Blocks are returned in document order.
+
+    Returns:
+        List of (lang, path_or_none, content).
+    """
+    # Strip special tokens
+    text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\|.*?\|>', '', text)
+
+    blocks: list[tuple[str, str | None, str]] = []
+
+    # Pattern: ```lang[:path]\ncontent\n``` or unclosed ```lang[:path]\ncontent$
+    pattern = r"```([A-Za-z0-9_-]+)(?::([^\n]+))?\s*\n(.*?)(?:```|$)"
+
+    for m in re.finditer(pattern, text, re.DOTALL):
+        lang = m.group(1).lower()
+        path = m.group(2).strip() if m.group(2) else None
+        content = m.group(3)
+        # Trim trailing newline from content but keep other whitespace
+        content = content.rstrip("\n")
+        blocks.append((lang, path, content))
+
+    return blocks
+
+
+# ---------------------------------------------------------------------------
+# File writing helpers
+# ---------------------------------------------------------------------------
+
+def write_blocks(
+    blocks: list[tuple[str, str | None, str]],
+    step: int,
+    target_file: str,
+    verbose: bool = False,
+) -> bool:
+    """Write all blocks to disk.
+
+    - ``file:path`` (or any non-executable lang) → write raw content to path.
+    - ``python:path`` / ``bash:path`` / ``sh:path`` / ``shell:path`` → write
+      content to path (also executable).
+    - ``python`` / ``bash`` / ``sh`` / ``shell`` without path → write to
+      /tmp/mini-agent-{timestamp}-{step}.{ext} for record.
+    - All paths resolved relative to CWD; parent dirs created.
+
+    Returns:
+        True if at least one block was written, False otherwise.
+    """
+    wrote_any = False
+    ts = time.strftime("%Y%m%d_%H%M%S")
+
+    for lang, path, content in blocks:
+        if path is None:
+            if lang in _EXECUTABLE_LANGS:
+                # Save executable blocks without path to temp for record
+                ext = "py" if lang in {"python", "py"} else "sh"
+                path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
+            else:
+                # Non-executable without path — skip (nothing to write)
+                if verbose:
+                    print(f"[write_blocks] Skipping {lang} block without path", file=sys.stderr)
+                continue
+
+        # Resolve path relative to CWD
+        full_path = os.path.abspath(path)
+
+        # Safety: don't escape project root if possible (best-effort)
+        # Not strictly enforced for local dev agent.
+
+        try:
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            wrote_any = True
+            if verbose:
+                print(f"[write_blocks] Wrote {lang} block to {full_path}", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
+
+    return wrote_any
+
+
 def _truncate_observation(text: str, max_length: int) -> str:
     """Truncate observation text at character level, preserving head and tail."""
     if max_length <= 0 or len(text) <= max_length:
@@ -42,13 +149,7 @@ def _truncate_observation(text: str, max_length: int) -> str:
 
 
 def _log(verbose: bool, text: str, limit: int = 0) -> None:
-    """Emit a debug line to stderr only when ``verbose`` is True.
-
-    When ``limit`` > 0 and ``text`` exceeds it, the text is cut to
-    ``limit`` characters and a marker appended so the operator knows the
-    console view was truncated for display only. This never affects the
-    data fed to the model or written to the JSONL log.
-    """
+    """Emit a debug line to stderr only when ``verbose`` is True."""
     if not verbose:
         return
     if limit > 0 and len(text) > limit:
@@ -59,84 +160,9 @@ def _log(verbose: bool, text: str, limit: int = 0) -> None:
     print(text, file=sys.stderr)
 
 
-def parse_code(text: str) -> str | None:
-    """Extract Python code from the LLM's markdown output.
-
-    Strips <think>...</think> blocks (Qwen/ornith thinking mode) first.
-    Then extracts code blocks in order of preference:
-    1. ```python / ```py — returned as-is (Python code)
-    2. ```bash / ```sh / ```shell — converted to execute_bash_command() calls
-    3. ``` (generic) — returned as-is
-    4. Bare code without fences — tested via ast.parse()
-
-    Returns None if no usable code can be extracted.
-    """
-    # Strip special tokens
-    text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<\|.*?\|>', '', text)
-    # Strip leaked reasoning tags (model sometimes emits <think>...</think> inline)
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = text.replace('</think>', '').replace('<think>', '')
-
-    # 1. ```python / ```py — native Python code
-    pattern_py = r"```(?:python|py)\s*\n(.*?)```"
-    matches = re.findall(pattern_py, text, re.DOTALL)
-    if matches:
-        return "\n\n".join(m.strip() for m in matches)
-
-    # 1b. Unclosed ```python block (model ran out of tokens)
-    unclosed = re.search(r"```(?:python|py)\s*\n(.+)", text, re.DOTALL)
-    if unclosed:
-        code = unclosed.group(1).strip()
-        if code:
-            return code
-
-    # 2. ```bash / ```sh / ```shell — convert to execute_bash_command() call
-    pattern_bash = r"```(?:bash|sh|shell)\s*\n(.*?)```"
-    matches = re.findall(pattern_bash, text, re.DOTALL)
-    if matches:
-        parts = []
-        for block in matches:
-            content = block.strip()
-            parts.append(
-                f'__result = execute_bash_command({repr(content)})\n'
-                f"print(__result)"
-            )
-        return "\n\n".join(parts)
-
-    # 2b. Unclosed ```bash block
-    unclosed_bash = re.search(r"```(?:bash|sh|shell)\s*\n(.+)", text, re.DOTALL)
-    if unclosed_bash:
-        content = unclosed_bash.group(1).strip()
-        if content:
-            return (
-                f'__result = execute_bash_command({repr(content)})\n'
-                f"print(__result)"
-            )
-
-    # 3. Generic ``` ... ``` — no language tag, try as Python
-    pattern_generic = r"```\s*\n(.*?)```"
-    matches = re.findall(pattern_generic, text, re.DOTALL)
-    if matches:
-        return "\n\n".join(m.strip() for m in matches)
-
-    # 3b. Unclosed generic code block
-    unclosed_generic = re.search(r"```\s*\n(.+)", text, re.DOTALL)
-    if unclosed_generic:
-        code = unclosed_generic.group(1).strip()
-        if code:
-            return code
-
-    # 4. Maybe the LLM outputted code directly without code fences
-    try:
-        import ast
-        ast.parse(text)
-        return text.strip()
-    except SyntaxError:
-        pass
-
-    return None
-
+# ---------------------------------------------------------------------------
+# Main ReAct loop
+# ---------------------------------------------------------------------------
 
 def react_loop(
     system_prompt: str,
@@ -160,15 +186,11 @@ def react_loop(
         max_observation_length: Max characters for observation content (0 = no truncation).
         verbose: If True, print step progress to stderr.
         compressor: Optional context compressor to bound conversation length.
-        target_file: Path of the file the agent is meant to create/fix. Passed
-            through so that recovery prompts (see ``prompts.ERROR_PROMPTS``) can
-            name the exact file the model must write to. Keeping it here avoids
-            baking the path into the (short, generic) system prompt.
+        target_file: Path of the file the agent is meant to create/fix.
 
     Returns:
         The final answer string, or an error message.
     """
-    # Conversation history
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
@@ -177,10 +199,10 @@ def react_loop(
     consecutive_loops = 0
     wrote_file = False
     no_progress = 0
+    syntax_warns = 0
 
     stop_sequences = ["Observation:"]
 
-    # Debug: dump key config once at startup
     _log(
         verbose,
         "ReAct config: "
@@ -200,45 +222,37 @@ def react_loop(
             messages = compressor.compress(messages, model)
             _log(
                 verbose and len(messages) < before,
-                f'[context] {before} -> {len(messages)} messages (compressed)',
+                f"[context] {before} -> {len(messages)} messages (compressed)",
             )
 
         # 0a. Token-based compress check (if compressor configured)
         if compressor is not None and hasattr(model, 'context_window') and hasattr(model, 'max_output_tokens'):
-            # Character-based estimate: ~4 chars per token
-            # Calculate current token estimate from all messages
             total_chars = sum(len(msg.get('content', '')) for msg in messages)
             estimated_tokens = total_chars // 4
-
             max_input_tokens = model.context_window - model.max_output_tokens
-            if estimated_tokens > max_input_tokens * 0.85:  # Buffer
+            if estimated_tokens > max_input_tokens * 0.85:
                 _log(
                     verbose,
-                    f'[token-check] Estimated {estimated_tokens} tokens exceeding '
-                    f'{max_input_tokens} max, compressing',
+                    f"[token-check] Estimated {estimated_tokens} tokens exceeding "
+                    f"{max_input_tokens} max, compressing",
                 )
                 before = len(messages)
-                # Keep only system, task, recent messages (force compress if needed)
-                # Re-use compressor with batch size increased to clear space
                 old_keep = getattr(compressor, 'compress_batch', 5)
                 setattr(compressor, 'compress_batch', len(messages))
                 messages = compressor.compress(messages, model)
                 setattr(compressor, 'compress_batch', old_keep)
                 _log(
                     verbose and len(messages) < before,
-                    f'[token-compress] {before} -> {len(messages)} messages',
+                    f"[token-compress] {before} -> {len(messages)} messages",
                 )
 
         # 1. Call the model
         cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
-
-        # Flatten content into plain strings for the API
         api_messages: list[dict] = []
         for msg in cleaned:
             role = msg["role"]
             content = msg["content"]
             if isinstance(content, list):
-                # Flatten content list to text
                 parts = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
@@ -278,10 +292,10 @@ def react_loop(
         else:
             consecutive_loops = 0
 
-        # 2. Parse code from model output
-        code = parse_code(output)
-        if code is None:
-            # Model didn't produce valid code — tell it (E001) and retry
+        # 2. Parse the step: all blocks
+        blocks = parse_step(output)
+        if not blocks:
+            # Model didn't produce any valid blocks — tell it (E001) and retry
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
@@ -289,25 +303,61 @@ def react_loop(
             })
             continue
 
-        # 3. Execute the code
-        _log(verbose, f"\nExecuting code:\n{code}", limit=300)
+        # 3. Write ALL file/executable blocks to disk FIRST
+        wrote_this_step = write_blocks(blocks, step, target_file, verbose)
+        if wrote_this_step:
+            wrote_file = True
 
-        result = execute_code(code, tools)
+        # 4. Find the FIRST executable block (python/bash/sh/shell) to run
+        exec_code = None
+        exec_lang = None
+        for lang, path, content in blocks:
+            if lang in _EXECUTABLE_LANGS:
+                exec_code = content
+                exec_lang = lang
+                break
 
-        # 3a. Track whether a write_file() call actually executed and persisted
-        # the file. We check the execution logs (not just the source text) so that
-        # merely MENTIONING write_file (in a comment or malformed call) does not
-        # falsely count as progress.
+        if exec_code is None:
+            # No executable block — we wrote files but have nothing to run.
+            # Nudge the model to include a python/bash block (even just final_answer).
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E001_NO_CODE),
+            })
+            continue
+
+        # 5. Execute the code
+        _log(verbose, f"\nExecuting {exec_lang} code:\n{exec_code}", limit=300)
+
+        result = execute_code(exec_code, tools)
+
+        # 5a. SyntaxError recovery: the model's own generated code
+        # failed to compile — almost always a quote/escape conflict from
+        # embedding a whole file inside a string literal. Nudge it to the
+        # ```file:path block path.
+        if result.error and result.error.startswith("SyntaxError") and syntax_warns < 3:
+            syntax_warns += 1
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E008_SYNTAX, target_file=target_file),
+            })
+            _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
+            continue
+
+        # 5b. Track whether a write_file() call actually executed and persisted
+        # the file. Check execution logs (not just source text) so that merely
+        # MENTIONING write_file (in a comment or malformed call) does not count.
         if not result.error and result.logs and "Written" in result.logs:
             wrote_file = True
 
-        # 3b. No-progress guard: if the model keeps producing steps that neither
-        # write, verify, nor finalize, it is stuck (e.g. re-defining functions
-        # without ever calling write_file). Stop early instead of burning steps.
+        # 5c. No-progress guard: if the model keeps producing steps that neither
+        # write, verify, nor finalize, it is stuck. Stop early.
         # Verification (run_python_file/execute_bash_command) only counts as
         # progress AFTER a write — running the still-buggy file is not progress.
-        verified = "run_python_file(" in code or "execute_bash_command(" in code
-        made_progress = wrote_file or result.is_final_answer
+        verified = "run_python_file" in result.tool_calls or "execute_bash_command" in result.tool_calls
+        made_progress = wrote_this_step or result.is_final_answer
         if verified and not wrote_file:
             made_progress = False
         if made_progress:
@@ -318,7 +368,7 @@ def react_loop(
             _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
             return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=target_file)
 
-        # 4. Build observation
+        # 6. Build observation
         if result.error:
             observation = f"Execution logs:\n{result.logs}\nError:\n{result.error}"
         else:
@@ -334,7 +384,7 @@ def react_loop(
 
         _log(verbose, f"\nObservation:\n{observation}", limit=500)
 
-        # 5. Check for final_answer
+        # 7. Check for final_answer
         if result.is_final_answer:
             # Guard: a final_answer without ever calling write_file() means the
             # fix lives only in exec() memory — the file on disk is still buggy.
@@ -349,25 +399,25 @@ def react_loop(
             _log(verbose, f"\n{'='*20} Done (final_answer) {'='*20}")
             return str(result.output) if result.output is not None else result.logs
 
-        # 5a. Warn if code ran without write_file() — file on disk is NOT fixed.
+        # 7a. Warn if code ran without write_file() — file on disk is NOT fixed.
         # Only warn after step 2 (model should read first, then fix), and do NOT
-        # warn on verification steps (run_python_file / execute_bash_command) which
-        # legitimately don't write but confirm the fix. Pick ONE error code per
-        # situation (see prompts.ERROR_PROMPTS): E004 when corrected code was
-        # assigned to a variable, E003 when only read/printed, else E005.
-        if (not result.error
-                and "write_file(" not in code
-                and "run_python_file(" not in code
-                and "execute_bash_command(" not in code
-                and step >= 3):
-            read_only = ("open(" in code or ".read(" in code or "read()" in code) and "write_file(" not in code
+        # warn on verification steps (run_python_file / execute_bash_command)
+        if (
+            not result.error
+            and not wrote_this_step
+            and "write_file" not in result.tool_calls
+            and "run_python_file" not in result.tool_calls
+            and "execute_bash_command" not in result.tool_calls
+            and step >= 3
+        ):
+            read_only = ("open(" in exec_code or ".read(" in exec_code or "read()" in exec_code) and "write_file" not in exec_code
             # Detect the "assign fixed CODE to a variable but never write" pattern.
             # Only treat as a fix variable if the assigned value looks like code
             # (contains def/import/class/return), NOT plain data like DATA = """...""".
             var = None
-            m = re.search(r'(\w+)\s*=\s*("""|\'\'\')', code)
+            m = re.search(r'(\w+)\s*=\s*("""|\'\'\')', exec_code)
             if m:
-                val = code[m.end():m.end() + 300]
+                val = exec_code[m.end():m.end() + 300]
                 if re.search(r'\b(def |import |class |return |print\()', val):
                     var = m.group(1)
             if var:
@@ -385,17 +435,15 @@ def react_loop(
             _log(verbose, f"\n[write_file-warning] {msg}")
             continue
 
-        # 6. Add to conversation history
+        # 8. Add to conversation history
         messages.append({"role": "assistant", "content": output})
         messages.append({"role": "user", "content": f"Observation:\n{observation}"})
 
     # Max steps reached — try to extract a reasonable answer from last output
     _log(verbose, f"\n{'='*20} Max steps reached {'='*20}")
 
-    # Last resort: return the last observation
     if messages and messages[-1].get("role") == "user":
         last_obs = messages[-1]["content"]
-        # Extract just the logs part
         if "Execution logs:\n" in last_obs:
             return last_obs.split("Execution logs:\n", 1)[1]
 

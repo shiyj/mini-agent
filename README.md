@@ -89,6 +89,23 @@ print(result)
 
 系统提示词仅 ~30 行（smolagents 默认 174 行），专为小模型优化。
 
+**核心工作流（Markdown 块驱动）：**
+```
+```file:target.py
+# 原始内容，零转义
+def main():
+    ...
+```
+
+```python
+run_python_file('target.py')
+final_answer("Fixed")
+```
+```
+- 所有 ````file:``` / ````python:``` / ````bash:``` 块**先写入磁盘**
+- 仅**第一个** ````python``` / ````bash``` 块在 `exec()` 中执行（注入工具、final_answer）
+- 零转义写文件，彻底解决 9B 模型字符串嵌套引号/转义失败
+
 ---
 
 ## 验证
@@ -109,9 +126,19 @@ uv run python3 verify/verify.py
 ```
 mini_agent/
 ├── config/
-│   └── prompts.json             # 提示词模板（prefill 配置等）
-├── doc/
-│   └── implementation.md        # 实现细节文档
+│   ├── prompts.json             # 极速流 prefill 配置
+│   └── agents.json              # Provider + Model 配置
+├── doc/                         # 按模块组织的文档
+│   ├── README.md                # 文档索引
+│   ├── types.md                 # types.py — 数据类型、消息处理
+│   ├── tools.md                 # tools.py — Tool 抽象、@tool、内置工具
+│   ├── code_executor.md         # code_executor.py — exec() 执行引擎
+│   ├── react_agent.md           # react_agent.py — ReAct 循环、解析、写入、错误恢复
+│   ├── prompts.md               # prompts.py — 系统提示词、错误码 E001–E008
+│   ├── model.md                 # model.py — ResponsesModel、SSE、消息处理
+│   ├── config.md                # config.py — 配置加载
+│   ├── agent.md                 # agent.py — 组合层、公共 API、两种模式
+│   └── architecture.md          # 整体架构、数据流、安全模型、与 smolagents 对比
 ├── examples/
 │   ├── basic_usage.py           # 最简使用示例
 │   ├── fast_vs_deep.py          # 极速 vs 深思 对比
@@ -120,8 +147,8 @@ mini_agent/
 │   └── mini_agent/
 │       ├── __init__.py          # 公共 API 导出
 │       ├── agent.py             # 两种 Agent 模式 + 工具函数
-│       ├── code_executor.py     # exec() 代码执行引擎（替代 smolagents 沙盒）
-│       ├── config.py            # config/prompts.json 加载器
+│       ├── code_executor.py     # exec() 代码执行引擎
+│       ├── config.py            # 配置加载器
 │       ├── model.py             # ResponsesModel（httpx + SSE）
 │       ├── prompts.py           # 小模型优化系统提示词
 │       ├── react_agent.py       # ReAct 循环核心
@@ -138,7 +165,7 @@ mini_agent/
 ## 依赖
 
 - Python >= 3.10
-- `httpx` >= 0.27.0（仅有的外部依赖）
+- `httpx` >= 0.27.0（**唯一**外部依赖）
 - 本地 Ollama 服务 + 可用模型
 
 ---
@@ -150,4 +177,18 @@ mini_agent/
 - **没有 AST 沙盒。** 用 `exec()` 直接执行代码，安全通过工具自身实现（`run_python_file` 走子进程）。
 - **导入时间 0.71s。** 对比 smolagents 方案 2.8s，减少 75%。
 
-详细实现说明见 [doc/implementation.md](doc/implementation.md)。
+---
+
+## 文档导航
+
+| 模块 | 文档 | 核心内容 |
+|------|------|----------|
+| `types.py` | [types.md](doc/types.md) | 数据类型、消息归一化、停止序列截断 |
+| `tools.py` | [tools.md](doc/tools.md) | Tool 抽象、@tool 装饰器、三个内置工具 |
+| `code_executor.py` | [code_executor.md](doc/code_executor.md) | exec() 执行引擎、工具注入、final_answer |
+| `react_agent.py` | [react_agent.md](doc/react_agent.md) | ReAct 循环、Markdown 块解析、文件写入、错误恢复 |
+| `prompts.py` | [prompts.md](doc/prompts.md) | 系统提示词、错误码 E001–E008 |
+| `model.py` | [model.md](doc/model.md) | ResponsesModel、SSE、空白重试 |
+| `config.py` | [config.md](doc/config.md) | prompts.json / agents.json 加载 |
+| `agent.py` | [agent.md](doc/agent.md) | 组合层、run_fast_agent / run_deep_agent |
+| 整体 | [architecture.md](doc/architecture.md) | 数据流图、模块依赖、安全模型、与 smolagents 对比 |

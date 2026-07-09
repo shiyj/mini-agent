@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from mini_agent import get_local_model, run_deep_agent
 from mini_agent.model import ResponsesModel
-from mini_agent.react_agent import parse_code
+from mini_agent.react_agent import parse_step, _EXECUTABLE_LANGS
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -95,8 +95,14 @@ def reconstruct_trace(log_path: Path) -> list[dict]:
         # Extract model output from response
         output_text = ResponsesModel._extract_output_text(response_data) or ""
 
-        # Parse code from model output
-        code = parse_code(output_text)
+        # Parse blocks from model output and take the first executable one
+        # (python/bash/sh/shell); this mirrors how the live ReAct loop runs
+        # only the first executable block.
+        code = None
+        for lang, _path, content in parse_step(output_text):
+            if lang in _EXECUTABLE_LANGS:
+                code = content
+                break
 
         # Detect error code from the last user message in this request
         # (the loop injects error codes as user messages between steps)

@@ -21,8 +21,8 @@ FAST_AGENT_SYSTEM = (
 # ---------------------------------------------------------------------------
 # Error-code -> recovery prompt registry.
 #
-# Design rule (see project discussion): the SYSTEM PROMPT must stay short and
-# generic. When the agent detects a specific failure mid-run, it injects a
+# Design rule: the SYSTEM PROMPT must stay short and generic.
+# When the agent detects a specific failure mid-run, it injects a
 # TARGETED recovery prompt as a user message — NOT by bloating the system
 # prompt. Each failure mode gets exactly ONE stable error code mapping to ONE
 # prompt. `react_agent.py` references these codes so all wording lives here.
@@ -36,50 +36,76 @@ E004_WRITE_VAR = "E004_WRITE_VAR"
 E005_WRITE_GENERIC = "E005_WRITE_GENERIC"
 E006_LOOP = "E006_LOOP"
 E007_NO_PROGRESS = "E007_NO_PROGRESS"
+E008_SYNTAX = "E008_SYNTAX"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
     "E001_NO_CODE": (
-        "Error E001: No valid Python code block found. "
-        "Please write your code in a ```python``` block and try again."
+        "Error E001: No executable ```python```/```bash``` block found. "
+        "You MUST include a code block to run. "
+        "If you just wrote a ```file:path``` block, add a ```python``` block "
+        "with run_python_file('...') and final_answer(...) to verify and finish."
     ),
-    # E002: called final_answer() but never persisted the fix with write_file()
+    # E002: called final_answer() but never persisted the fix
     "E002_FINAL_NO_WRITE": (
-        "Warning E002: you called final_answer() but never used write_file() to save "
-        "the corrected code to disk (target: {target_file}). The file on disk is still "
-        "buggy. Call write_file() with the fixed code first, then verify with "
-        "run_python_file(), then call final_answer()."
+        "Warning E002: you called final_answer() but never saved the corrected "
+        "code to disk (target: {target_file}). Use a ```file:{target_file}``` block "
+        "with the raw file content, or call write_file() with the fixed code, then "
+        "run_python_file() to verify, then final_answer()."
     ),
     # E003: code only read/printed the file, never wrote it
     "E003_WRITE_READONLY": (
-        "Warning E003: You only read/printed the file. You MUST use write_file() to "
-        "overwrite it with the corrected code, then run_python_file() to verify, then "
-        "final_answer()."
+        "Warning E003: You only read/printed the file. You MUST overwrite it with "
+        "the corrected code using a ```file:{target_file}``` block (or write_file()), "
+        "then run_python_file() to verify, then final_answer()."
     ),
     # E004: corrected code was assigned to a variable but never written
     "E004_WRITE_VAR": (
-        "Warning E004: You assigned the corrected code to the variable `{var}` but never "
-        "saved it. Call write_file(filename='{target_file}', content={var}) right now to "
+        "Warning E004: You assigned the corrected code to the variable `{var}` but "
+        "never saved it. Use a ```file:{target_file}``` block with the raw content, "
+        "or call write_file(filename='{target_file}', content={var}) right now to "
         "persist the fix, then run_python_file() to verify, then final_answer()."
     ),
     # E005: code ran but did not save anything (generic)
     "E005_WRITE_GENERIC": (
         "Warning E005: Your code ran but did NOT save changes to the file. Running or "
-        "printing code without write_file() does NOT fix the file on disk. Use "
-        "write_file() to save the corrected code, then run_python_file() to test it, then "
-        "call final_answer()."
+        "printing code without saving does NOT fix the file on disk. Use a "
+        "```file:{target_file}``` block with the raw content, or write_file() to save "
+        "the corrected code, then run_python_file() to test it, then call final_answer()."
     ),
     # E006: model emitted identical output 3+ times (stuck in a loop)
     "E006_LOOP": (
         "Warning E006: your last 3 responses were identical — you are stuck in a loop. "
-        "Stop exploring or printing. Use write_file() to overwrite the file with the "
-        "corrected code, run_python_file() to verify, then call final_answer()."
+        "Stop exploring or printing. Use a ```file:{target_file}``` block with the "
+        "corrected content (or write_file()), run_python_file() to verify, then call "
+        "final_answer()."
     ),
     # E007: no write/verify/finalize progress for 6 consecutive steps
     "E007_NO_PROGRESS": (
-        "Warning E007: Stuck — no progress toward fixing the file (no write_file/run in "
-        "6 consecutive steps). You must call write_file() with the corrected content to "
-        "actually fix the file on disk."
+        "Warning E007: Stuck — no progress toward fixing the file (no file write/run "
+        "in 6 consecutive steps). You must save the corrected content to disk using a "
+        "```file:{target_file}``` block or write_file()."
+    ),
+    # E008: the model's OWN generated code failed to compile (SyntaxError),
+    # almost always a quote/escape conflict from embedding a whole file
+    # inside a Python string literal. Point it at the ```file:path block.
+    "E008_SYNTAX": (
+        "Error E008: your code had a SyntaxError and did NOT run — almost certainly a "
+        "quote/escape conflict from putting the whole file inside a string. "
+        "STOP using content='...' for multi-line files. Instead:\n\n"
+        "1. Put the ENTIRE corrected file content in a ```file:{target_file}``` block "
+        "(raw, no quotes, no escaping).\n"
+        "2. In a ```python``` block, call run_python_file('{target_file}') to test it.\n"
+        "3. Call final_answer('...') when it works.\n\n"
+        "Example:\n"
+        "```file:{target_file}\n"
+        "def main():\n"
+        "    print(\"hello\")\n"
+        "```\n"
+        "```python\n"
+        "run_python_file('{target_file}')\n"
+        "final_answer(\"Fixed\")\n"
+        "```"
     ),
 }
 
@@ -87,7 +113,6 @@ ERROR_PROMPTS = {
 def format_error(code: str, target_file: str | None = None, var: str | None = None) -> str:
     """Return the recovery prompt for ``code``, filling ``{target_file}``/``{var}``."""
     return ERROR_PROMPTS[code].format(target_file=target_file or "", var=var or "")
-
 
 
 def build_deep_system_prompt(
@@ -109,34 +134,44 @@ def build_deep_system_prompt(
         You are a Python programmer. Solve tasks by writing and running code.
 
         ## Workflow
-        1. Use write_file() to save your script to {target_file}
-        2. Use run_python_file() to run it
-        3. If there are errors, fix and write_file() again, then run again
-        4. When the script works, call final_answer(result) IMMEDIATELY
+        1. Read the file with read_file() if needed
+        2. Write the corrected file using a ```file:{target_file}``` block (raw content, no escaping)
+        3. Run it with run_python_file() in a ```python``` block
+        4. When it works, call final_answer(result) in the SAME ```python``` block
 
         ## Rules
-        - Write Python code in ```python``` blocks
-        - ALWAYS use write_file() to save scripts
-        - Use read_file() to inspect existing files — its output is NEVER truncated, so you see the whole file
-        - Tool results are automatically printed — no need to call print() yourself
-        - When code runs successfully, call final_answer() right away
-        - Do NOT re-run the same code multiple times
+        - Write Python/bash code in ```python``` or ```bash``` blocks
+        - **CRITICAL**: To write a file, use a ```file:path``` block with RAW content (no quotes, no escaping).
+        - All ```file:``` blocks are written to disk FIRST, then your first ```python```/```bash``` block runs.
+        - ONLY THE FIRST ```python```/```bash``` block is executed.
+        - ```python:path```/```bash:path``` blocks are also saved to `path` (or /tmp/mini-agent-*.py if no path).
+        - Tool results are automatically printed — no need to call print() yourself.
+        - When code runs successfully, call final_answer() right away.
+        - Do NOT re-run the same code multiple times.
+
+        ## How to write a file
+        - To CREATE or FIX a file: use a ```file:path/to/file.py``` block with the EXACT raw content.
+        - To RUN code: use a ```python``` block (only the first one runs).
+        - You can name it: ```python:path/to/run.py``` (also saves a copy there).
+        - Example — fix a bug in {target_file}:
+          ```file:{target_file}
+          def main():
+              records = [1, 2, 3]
+              print(sum(records))
+          if __name__ == "__main__":
+              main()
+          ```
+          ```python
+          run_python_file('{target_file}')
+          final_answer("Fixed")
+          ```
 
         ## Tools
         {tool_list}
 
-        ## Example
-        Task: "Write a script to {target_file} that prints the sum of 1 to 100"
-        ```python
-        code = "print(sum(range(1, 101)))"
-        write_file(filename="{target_file}", content=code)
-        run_python_file(filename="{target_file}")
-        final_answer("done")
-        ```
-
         ## Important
-        - ALWAYS use write_file() to save your script first
-        - ALWAYS use run_python_file() to execute the saved script
+        - ALWAYS save the file first (```file:path``` or write_file())
+        - ALWAYS run the saved file with run_python_file() to verify
         - ALWAYS call final_answer() when your code works
         - Never repeat working code
     """)

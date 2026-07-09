@@ -92,12 +92,12 @@ If a temperature band has significantly better or worse performance, adjust the 
 
 | Pattern | What to look for | Tuning lever |
 |---------|-----------------|--------------|
-| E005 dominant | Model runs code, prints results, never calls `write_file()` | Make E005 recovery prompt more forceful; reduce `max_observation_length` so model sees less noise |
-| E004 dominant | Model assigns `CORRECTED = """…"""` but never calls `write_file(filename=…)` | Ensure E004 prompt includes the exact target file name; reduce `temperature` for more deterministic behavior |
+| E005 dominant | Model runs code, prints results, never writes a ````file:path``` block | Make E005 recovery prompt more forceful; reduce `max_observation_length` so model sees less noise |
+| E004 dominant | Model assigns `CORRECTED = """…"""` but never writes a ````file:path``` block | Ensure E004 prompt includes the exact target file name; reduce `temperature` for more deterministic behavior |
 | E006 dominant | Model repeats same output ≥3 times | Increase `consecutive_loops` threshold or reword E006 prompt to give clearer instructions |
-| E001 dominant | Model outputs no parseable code block | Prefill may have broken; check if model is producing thinking tags that `parse_code` doesn't strip |
+| E001 dominant | Model outputs no parseable block (no ````file:path` nor ````python`/`bash` block) | Prefill may have broken; check whether model emitted bare text with no fenced blocks that `parse_step` can extract |
 | High‑temperature failure | T > 0.6 rounds fail more | Narrow temperature range to 0.0–0.6 |
-| final_answer but no write_file | E002 triggered → never writes to disk | The `final_answer` guard may need stronger language |
+| final_answer but no file block | E002 triggered → never writes to disk | The `final_answer` guard may need stronger language |
 
 ## Recording modifications
 
