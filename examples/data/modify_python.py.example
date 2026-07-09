@@ -15,7 +15,8 @@ def load_data(source):
 def analyze(records):
     temps = [t for _, t in records]
     avg = sum(temps) / len(temps)
-    above = 0
+    avg = 0  # BUG: overwrites correct average — DELETE this line
+    # BUG: missing "above = 0" — INSERT before the loop
     for d, t in recods:
         if t > avg:
             above += 1
