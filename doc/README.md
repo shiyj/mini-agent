@@ -12,7 +12,7 @@
 | [model.md](model.md) | `model.py` | ResponsesModel、SSE、消息处理 |
 | [config.md](config.md) | `config.py` | 配置加载 |
 | [agent.md](agent.md) | `agent.py` | 组合层、公共 API、两种模式入口 |
-| [architecture.md](architecture.md) | 整体架构 | 数据流图、模块依赖、与 smolagents 对比 |
+| [architecture.md](architecture.md) | 整体架构 | 数据流图、模块依赖、核心设计决策 |
 
 ---
 

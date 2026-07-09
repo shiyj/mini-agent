@@ -1,7 +1,6 @@
-"""Configuration loader — prompts and per-model agent settings.
+"""Configuration loader — per-model agent settings.
 
-Two config files in config/:
-  - prompts.json    — prompt templates
+One config file in config/:
   - agents.json     — per-model settings (providers, context window, compressor, etc.)
 """
 
@@ -13,31 +12,6 @@ from pathlib import Path
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
-
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-_prompts_cache: dict | None = None
-
-
-def load_prompts(prompts_path: str | Path | None = None) -> dict:
-    """Load prompt templates from config/prompts.json."""
-    global _prompts_cache
-    if _prompts_cache is not None:
-        return _prompts_cache
-
-    if prompts_path is None:
-        prompts_path = _project_root() / "config" / "prompts.json"
-
-    path = Path(prompts_path)
-    if not path.exists():
-        _prompts_cache = {}
-        return _prompts_cache
-
-    _prompts_cache = json.loads(path.read_text(encoding="utf-8"))
-    return _prompts_cache
 
 
 # ---------------------------------------------------------------------------

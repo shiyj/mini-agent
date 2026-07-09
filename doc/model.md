@@ -77,7 +77,6 @@ async def generate_stream(self, messages, stop_sequences):
                     if data.get("type") == "response.output_text.delta":
                         yield data["delta"]
                     elif data.get("type") == "response.completed":
-                        # 提取 usage
                         break
 ```
 
@@ -113,7 +112,7 @@ for attempt in range(2):
         return text
     if attempt == 0:
         body["temperature"] = min(body.get("temperature", 0) + 0.25, 1.0)
-return ""  # 两次都空返回空串
+return ""
 ```
 
 容纳模型偶发空白输出。
@@ -126,7 +125,6 @@ return ""  # 两次都空返回空串
 api_base = api_base.rstrip("/")
 if api_base.endswith("/v1"):
     api_base = api_base[:-3]
-# http://localhost:11434/v1 → http://localhost:11434
 ```
 
 兼容带 `/v1` 和不带的输入格式。
@@ -149,9 +147,3 @@ model = ResponsesModel(
 
 result = run_deep_agent("Fix the bug in foo.py", model, target_file="foo.py")
 ```
-
----
-
-## 与 smolagents Model 基类的关系
-
-**无继承关系。** `ResponsesModel` 是独立实现，仅暴露 `generate()` 方法供 `react_loop` 调用。用户可自行实现同签名类替换。

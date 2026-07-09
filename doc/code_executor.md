@@ -2,7 +2,6 @@
 
 ## 概述
 
-替代 smolagents 的 1768 行 `LocalPythonExecutor`（AST 白名单解释器）。
 仅 ~120 行 `exec()` 实现，无白名单，完整内置函数。
 
 ---

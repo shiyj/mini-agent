@@ -1,4 +1,4 @@
-# tools.md — 工具抽象与内置工具
+# tools.py — 工具抽象与内置工具
 
 ## Tool 类
 
@@ -8,12 +8,10 @@ class Tool:
     description: str   # 文档字符串首段
     func: Callable     # 底层 Python 函数
     inputs: dict       # 输入参数 schema，从类型注解自动提取
-    
+
     def to_prompt(self) -> str:   # 生成提示词中的函数签名
     def __call__(self, **kwargs) -> Any:  # 调用底层函数
 ```
-
-**关键区别**：不验证参数名必须为 `argument` 或 `args`（smolagents 要求），更宽松。
 
 ---
 
@@ -33,53 +31,18 @@ def write_file(filename: str, content: str) -> str:
 
 ---
 
-## 三个内置工具
+## 四个内置工具
 
-### write_file(filename, content)
+| 工具 | 签名 | 机制 | 超时 |
+|------|------|------|------|
+| `read_file` | `read_file(filename: str) -> str` | 进程内 `open().read()`，永不截断 | 无 |
+| `write_file` | `write_file(filename: str, content: str) -> str` | 进程内 `open().write()` | 无 |
+| `run_python_file` | `run_python_file(filename: str) -> str` | `subprocess.run(["python3", filename])` | 30s |
+| `execute_bash_command` | `execute_bash_command(command: str) -> str` | `subprocess.run(command, shell=True)` | 30s |
 
-```python
-def write_file(filename: str, content: str) -> str:
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"Written {len(content)} bytes to {filename}"
-```
-
-- 同步写入，**在当前进程**（仅磁盘 I/O，无隔离需求）
-- 返回确认消息，自动被 `execute_code` 打印到 Observation
-
----
-
-### run_python_file(filename)
-
-```python
-def run_python_file(filename: str) -> str:
-    result = subprocess.run(
-        ["python3", filename],
-        capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode == 0:
-        return f"【OK】\n{result.stdout}"
-    else:
-        return f"【FAILED exit={result.returncode}】\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-```
-
-- **子进程隔离**，30s 超时
-- 返回完整 stdout/stderr，供模型观察
-
----
-
-### execute_bash_command(command)
-
-```python
-def execute_bash_command(command: str) -> str:
-    result = subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=30,
-    )
-    ...
-```
-
-- 任意 shell 命令，子进程隔离
-- 用户自行控制安全性
+### 设计原则
+- `read_file` / `write_file`：本地 I/O，无需隔离
+- `run_python_file` / `execute_bash_command`：走子进程，**这是安全边界**——模型通过 `exec()` 跑的代码不受限，但真正的文件执行、Shell 命令在子进程隔离
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## 概述
 
-替代 smolagents 800 行 `CodeAgent`，约 200 行实现完整 Thought → Code → Observation 循环。
+约 200 行实现完整 Thought → Code → Observation 循环。
 
 ---
 
@@ -34,53 +34,53 @@ def react_loop(
 for step in 1..max_steps:
   0. 上下文压缩（可选）
   0a. Token 阈值压缩（可选）
-  
+
   1. 模型调用
      response = model.generate(messages, stop_sequences=["Observation:"])
      output = response.content
-  
+
   2a. 循环检测
      连续 3 次相同输出 → E006 警告
      连续 3 次 E006 → 返回 E006 终止
-  
+
   3. parse_step(output) → blocks
      空列表 → E001 → continue
-  
+
   4. write_blocks(blocks, step, target_file)
      所有 ```lang[:path]``` 块写入磁盘
      wrote_this_step = True/False
-  
+
   5. 执行第一个可执行块
      遍历 blocks，首个 lang in {python,py,bash,sh,shell} → exec_code
      无可执行块 → E001 → continue
-     
+
      result = execute_code(exec_code, tools)
-  
+
   5a. SyntaxError 恢复 (E008)
      最多 3 次，注入 E008 恢复提示
-  
+
   5b. wrote_file 追踪
      result.tool_calls 中有 "write_file" 或 wrote_this_step → wrote_file = True
-  
+
   5c. 无进度守卫 (E007)
      verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls
      made_progress = wrote_this_step or result.is_final_answer
      if verified and not wrote_file: made_progress = False
      连续 6 步无进度 → E007 → return
-  
+
   6. 构建 Observation
      error → "Execution logs + Error"
      success → "Execution logs + Last output"
      read_file 调用时不截断
-  
+
   7. final_answer 检查
      if result.is_final_answer:
        if not wrote_file: E002 → continue
        return result.output
-  
+
   7a. 写入守卫 (step>=3)
      无写入、无验证、无 final_answer → E003/E004/E005 → continue
-  
+
   8. 追加到 messages 继续循环
 
 Max steps 耗尽 → 返回最后一条 Observation 或 fallback
@@ -141,7 +141,7 @@ for lang, path, content in blocks:
             path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
         else:
             continue  # 跳过无路径非可执行块
-    
+
     full_path = os.path.abspath(path)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     with open(full_path, "w", encoding="utf-8") as f:

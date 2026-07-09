@@ -1,4 +1,4 @@
-"""Tool abstraction — replaces smolagents.tools.Tool and @tool decorator.
+"""Tool abstraction — Tool class and @tool decorator.
 
 Tools are plain Python callables with metadata for prompt generation.
 """

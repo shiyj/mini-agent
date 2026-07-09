@@ -2,7 +2,7 @@
 
 ## 概述
 
-替代 smolagents 的 `models` 和 `monitoring` 模块。纯 dataclass + Enum，零外部依赖。
+纯 dataclass + Enum，零外部依赖。
 
 ---
 

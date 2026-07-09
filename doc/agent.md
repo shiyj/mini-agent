@@ -14,20 +14,19 @@ from mini_agent import (
     get_local_model,
     load_agent_config,
     ResponsesModel,
-    
+
     # 两种模式
     run_fast_agent,
     run_deep_agent,
     run_deep_agent_with_config,
-    
+
     # 工具（如需自定义）
     write_file,
     read_file,
     run_python_file,
     execute_bash_command,
-    
+
     # 配置
-    load_prompts,
     load_agent_config,
 )
 ```
@@ -66,14 +65,15 @@ print(result)  # 原始模型输出
 ```
 
 **内部：**
-1. 读取 `config/prompts.json` → `fast_agent.system_instruction`
-2. 构建 messages：`[system, user, assistant(prefill)]`
-3. `model.generate(messages)` → 返回内容
+1. 使用 `FAST_AGENT_SYSTEM`（12 词）作为系统提示词
+2. 从 `prompts.py` 读取 `FAST_AGENT_PREFILL` / `FAST_AGENT_PREFILL_TEXT` 常量
+3. 构建 messages：`[system, user, assistant(prefill)]`
+4. `model.generate(messages)` → 返回内容
 
 **Prefill 机制：**
 - Qwen 系模型有 Ollama 原生 thinking 模式
 - 追加 `{"role": "assistant", "content": "```python\n"}` → 模型认为已开始写代码，跳过 thinking
-- 关闭：`prefill=False` 或 `config/prompts.json` 中 `"prefill": false`
+- 关闭：`prefill=False`
 
 ---
 
@@ -97,14 +97,14 @@ print(result)
 ```python
 def run_deep_agent(prompt, model, target_file, max_steps=8, **kwargs):
     model.max_output_tokens = max(model.max_output_tokens, 4096)
-    tools = [write_file, run_python_file, execute_bash_command]
-    
+    tools = [write_file, run_python_file, execute_bash_command, read_file]
+
     task = prompt + "\n\nIMPORTANT: Follow these steps exactly:\n" \
         "1. Write the corrected file using a ```file:...``` block\n" \
         "2. Run it with run_python_file() in a ```python``` block\n" \
         "3. If errors, fix and write again, then run again\n" \
         "4. When it works, call final_answer(result)"
-    
+
     return react_loop(
         system_prompt=build_deep_system_prompt(tools, target_file),
         task=task,
@@ -147,15 +147,16 @@ def run_deep_agent_with_config(
 
 ---
 
-## 三个内置工具
+## 四个内置工具
 
 | 工具 | 签名 | 说明 |
 |------|------|------|
+| `read_file` | `read_file(filename: str) -> str` | 读取文件全文返回，**永不截断**（模型显式请求看完整文件） |
 | `write_file` | `write_file(filename: str, content: str) -> str` | 进程内写文件，返回 `"Written N bytes to ..."` |
 | `run_python_file` | `run_python_file(filename: str) -> str` | `subprocess.run(["python3", filename], timeout=30)` 捕获 stdout/stderr |
 | `execute_bash_command` | `execute_bash_command(command: str) -> str` | `subprocess.run(command, shell=True, timeout=30)` |
 
-**安全边界：** `write_file` 本地 I/O 无需隔离；运行脚本、Shell 命令走子进程，30s 超时。
+**安全边界：** `read_file` / `write_file` 本地 I/O 无需隔离；运行脚本、Shell 命令走子进程，30s 超时。
 
 ---
 

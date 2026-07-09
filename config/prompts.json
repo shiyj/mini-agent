@@ -1,6 +1,0 @@
-{
-  "fast_agent": {
-    "prefill": true,
-    "prefill_text": "```python\n"
-  }
-}

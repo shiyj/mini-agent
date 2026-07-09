@@ -1,4 +1,4 @@
-"""ReAct loop — replaces smolagents' 800-line CodeAgent.
+"""ReAct loop — Thought → Code → Observation cycle.
 
 Implements the core Thought → Code → Observation cycle:
 1. Send system prompt + task + conversation history to the model

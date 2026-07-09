@@ -14,11 +14,11 @@ import os
 from pathlib import Path
 
 from mini_agent import (
-    load_prompts,
     get_local_model,
     run_deep_agent,
     run_fast_agent,
 )
+from mini_agent.prompts import FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT
 
 
 MAX_RETRIES = 10
@@ -50,10 +50,9 @@ def _model():
 
 
 def step_prompts() -> None:
-    prompts = load_prompts()
-    assert "fast_agent" in prompts, "prompts.json missing fast_agent key"
-    assert "prefill" in prompts["fast_agent"]
-    print(f"[PASS] Prompts loaded, keys={list(prompts.keys())}")
+    assert FAST_AGENT_PREFILL is True, "FAST_AGENT_PREFILL should be True"
+    assert FAST_AGENT_PREFILL_TEXT == "```python\n", "FAST_AGENT_PREFILL_TEXT mismatch"
+    print(f"[PASS] Prompts constants OK, prefill={FAST_AGENT_PREFILL}, text={FAST_AGENT_PREFILL_TEXT!r}")
 
 
 def step_model_connectivity() -> None:

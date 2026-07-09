@@ -1,4 +1,4 @@
-"""Core data types — replaces smolagents.models and smolagents.monitoring.
+"""Core data types — ChatMessage, MessageRole, TokenUsage.
 
 No external dependencies. These are plain dataclasses and enums.
 """

@@ -1,6 +1,6 @@
 """mini_agent — local lightweight programming agent.
 
-No smolagents dependency. Uses httpx for model calls and exec() for code execution.
+Uses httpx for model calls and exec() for code execution.
 
 ReAct architecture with two depths:
   - run_fast_agent()   single-pass code generation, no tools
@@ -16,7 +16,7 @@ from .agent import (
     run_deep_agent,
     run_deep_agent_with_config,
 )
-from .config import load_agent_config, load_prompts
+from .config import load_agent_config
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .tools import Tool, tool
@@ -31,7 +31,6 @@ __all__ = [
     "run_fast_agent",
     "run_deep_agent",
     "run_deep_agent_with_config",
-    "load_prompts",
     "load_agent_config",
     "ContextCompressor",
     "SummaryCompressor",

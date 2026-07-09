@@ -19,10 +19,10 @@ Users create the model externally and pass it in.
 
 import subprocess
 
-from .config import load_agent_config, load_prompts
+from .config import load_agent_config
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
-from .prompts import FAST_AGENT_SYSTEM, build_deep_system_prompt
+from .prompts import FAST_AGENT_SYSTEM, FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT, build_deep_system_prompt
 from .react_agent import react_loop
 from .tools import Tool, tool
 from .types import (
@@ -49,7 +49,7 @@ def get_local_model(
 ) -> ResponsesModel:
     """Create a model that talks to a ``/v1/responses`` endpoint.
 
-    No smolagents dependency — uses ``httpx`` directly.
+    Uses ``httpx`` directly.
 
     Args:
         model_name: Model tag, e.g. ``"ornith:9b"``.
@@ -198,14 +198,11 @@ def run_fast_agent(
     Returns:
         The raw model output (code / text).
     """
-    # Read prefill config from JSON; prompt text lives in prompts.py
-    prompts_cfg = load_prompts()
-    fast_cfg = prompts_cfg.get("fast_agent", {})
-
+    # Read prefill config from prompts.py constants
     if prefill is None:
-        prefill = fast_cfg.get("prefill", True)
+        prefill = FAST_AGENT_PREFILL
 
-    prefill_text = fast_cfg.get("prefill_text", "```python\n")
+    prefill_text = FAST_AGENT_PREFILL_TEXT
 
     messages = [
         {"role": "system", "content": [{"type": "text", "text": FAST_AGENT_SYSTEM}]},

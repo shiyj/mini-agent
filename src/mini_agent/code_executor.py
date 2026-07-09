@@ -1,4 +1,4 @@
-"""Code executor — replaces smolagents' 1768-line LocalPythonExecutor.
+"""Code executor — exec()-based Python execution with tool injection.
 
 Uses exec() with injected globals for tool calling and final_answer detection.
 No whitelist, no AST interpreter — just plain Python with full builtins.

@@ -17,6 +17,10 @@ FAST_AGENT_SYSTEM = (
     "No explanation, no thinking blocks."
 )
 
+# Fast-agent prefill config (moved from config/prompts.json)
+FAST_AGENT_PREFILL = True
+FAST_AGENT_PREFILL_TEXT = "```python\n"
+
 
 # ---------------------------------------------------------------------------
 # Error-code -> recovery prompt registry.

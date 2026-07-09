@@ -1,6 +1,6 @@
 """Custom Model that calls a ``/v1/responses`` endpoint via httpx.
 
-No smolagents dependency — uses local types only.
+Uses local types only.
 Supports both SSE streaming and non-streaming (bulk) modes.
 """
 
@@ -54,7 +54,7 @@ def _parse_sse(line: str) -> tuple[str, str] | None:
 class ResponsesModel:
     """Model that calls a ``/v1/responses`` compatible endpoint via httpx.
 
-    No smolagents dependency. Provider-agnostic — works with any server
+    Provider-agnostic — works with any server
     that implements the OpenAI Responses API schema (Ollama, custom proxies, etc.).
 
     Parameters:
