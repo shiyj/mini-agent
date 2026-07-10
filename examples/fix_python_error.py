@@ -47,9 +47,20 @@ print(f"\n[1/3] Copying {EXAMPLE_SRC.name}  ->  {TARGET.name} (stripping comment
 # Strip comments during copy so the agent sees buggy code without hints
 import re  # noqa: E402
 example_text = EXAMPLE_SRC.read_text(encoding="utf-8")
+def _strip_inline_comment(line: str) -> str:
+    in_sq = False
+    in_dq = False
+    for i, ch in enumerate(line):
+        if ch == '"' and not in_sq:
+            in_dq = not in_dq
+        elif ch == "'" and not in_dq:
+            in_sq = not in_sq
+        elif ch == "#" and not in_sq and not in_dq:
+            return line[:i].rstrip()
+    return line
+
 stripped = "\n".join(
-    line if not line.strip().startswith("#") else ""
-    for line in example_text.splitlines()
+    _strip_inline_comment(line) for line in example_text.splitlines()
 )
 # Collapse blank lines after comment removal
 cleaned = re.sub(r"\n{3,}", "\n\n", stripped).strip() + "\n"

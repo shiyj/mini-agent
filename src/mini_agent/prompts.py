@@ -47,9 +47,13 @@ ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
     "E001_NO_CODE": (
         "Error E001: No executable ```python```/```bash``` block found. "
-        "You MUST include a code block to run. "
-        "If you just wrote a ```file:path``` block, add a ```python``` block "
-        "with run_python_file('...') and final_answer(...) to verify and finish."
+        "You MUST include a code block that runs. Prefer small, targeted fixes: "
+        "use an ```edit:{target_file}``` block to change just the broken line(s) "
+        "(e.g. fix a typo), then a ```python``` block with "
+        "run_python_file('{target_file}') to verify, then final_answer(...). "
+        "Only rewrite the whole file with a ```file:{target_file}``` block when "
+        "many changes are needed, and always follow it with a run_python_file() "
+        "check."
     ),
     # E002: called final_answer() but never persisted the fix
     "E002_FINAL_NO_WRITE": (
@@ -81,15 +85,17 @@ ERROR_PROMPTS = {
     # E006: model emitted identical output 3+ times (stuck in a loop)
     "E006_LOOP": (
         "Warning E006: your last 3 responses were identical — you are stuck in a loop. "
-        "Stop exploring or printing. Use a ```file:{target_file}``` block with the "
-        "corrected content (or write_file()), run_python_file() to verify, then call "
-        "final_answer()."
+        "Stop exploring or printing. Make a concrete change: use an "
+        "```edit:{target_file}``` block to fix the specific broken line(s), or a "
+        "```file:{target_file}``` block with the corrected content, then "
+        "run_python_file() to verify, then call final_answer()."
     ),
     # E007: no write/verify/finalize progress for 6 consecutive steps
     "E007_NO_PROGRESS": (
         "Warning E007: Stuck — no progress toward fixing the file (no file write/run "
-        "in 6 consecutive steps). You must save the corrected content to disk using a "
-        "```file:{target_file}``` block or write_file()."
+        "in 6 consecutive steps). Save the corrected content to disk using an "
+        "```edit:{target_file}``` block for targeted changes, or a "
+        "```file:{target_file}``` block / write_file() for a full rewrite."
     ),
     # E009: hash-anchored edit failed because the file changed since read
     "E009_STALE_ANCHOR": (
@@ -99,24 +105,16 @@ ERROR_PROMPTS = {
     ),
     # E008: the model's OWN generated code failed to compile (SyntaxError),
     # almost always a quote/escape conflict from embedding a whole file
-    # inside a Python string literal. Point it at the ```file:path block.
+    # inside a Python string literal. Point it at the ```edit: / ```file: block.
     "E008_SYNTAX": (
         "Error E008: your code had a SyntaxError and did NOT run — almost certainly a "
         "quote/escape conflict from putting the whole file inside a string. "
-        "STOP using content='...' for multi-line files. Instead:\n\n"
-        "1. Put the ENTIRE corrected file content in a ```file:{target_file}``` block "
-        "(raw, no quotes, no escaping).\n"
-        "2. In a ```python``` block, call run_python_file('{target_file}') to test it.\n"
-        "3. Call final_answer('...') when it works.\n\n"
-        "Example:\n"
-        "```file:{target_file}\n"
-        "def main():\n"
-        "    print(\"hello\")\n"
-        "```\n"
-        "```python\n"
-        "run_python_file('{target_file}')\n"
-        "final_answer(\"Fixed\")\n"
-        "```"
+        "STOP using content='...' for multi-line files. Prefer a targeted fix: "
+        "use an ```edit:{target_file}``` block to change just the broken line(s). "
+        "If a full rewrite is truly needed, put the ENTIRE corrected file content "
+        "in a ```file:{target_file}``` block (raw, no quotes, no escaping), then in "
+        "a ```python``` block call run_python_file('{target_file}') and "
+        "final_answer('...')."
     ),
 }
 

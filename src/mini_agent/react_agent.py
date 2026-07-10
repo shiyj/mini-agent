@@ -105,12 +105,15 @@ def write_blocks(
     - All paths resolved relative to CWD; parent dirs created.
 
     Returns:
-        (wrote_any, edit_reports) — ``wrote_any`` is True if at least one block
-        was written/edited; ``edit_reports`` is a list of result strings from
-        edit blocks (success or stale-anchor errors).
+        (wrote_any, edit_reports, file_reports) — ``wrote_any`` is True if at
+        least one block was written/edited; ``edit_reports`` is a list of result
+        strings from edit blocks (success or stale-anchor errors);
+        ``file_reports`` is a list of "written" messages for ``file:`` blocks,
+        so callers can tell a full-file write apart from an edit step.
     """
     wrote_any = False
     edit_reports: list[str] = []
+    file_reports: list[str] = []
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
@@ -146,13 +149,15 @@ def write_blocks(
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
             wrote_any = True
+            if lang == "file":
+                file_reports.append(f"Written {full_path}")
             if verbose:
                 print(f"[write_blocks] Wrote {lang} block to {full_path}", file=sys.stderr)
         except Exception as e:
             if verbose:
                 print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
 
-    return wrote_any, edit_reports
+    return wrote_any, edit_reports, file_reports
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -319,7 +324,7 @@ def react_loop(
             continue
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports = write_blocks(blocks, step, target_file, verbose)
+        wrote_this_step, edit_reports, file_reports = write_blocks(blocks, step, target_file, verbose)
         if wrote_this_step:
             wrote_file = True
 
@@ -347,6 +352,17 @@ def react_loop(
             if edit_reports:
                 # Edit-only step — surface edit results as observation
                 observation = "\n".join(edit_reports)
+                messages.append({"role": "assistant", "content": output})
+                messages.append({"role": "user", "content": f"Observation:\n{observation}"})
+                continue
+            if file_reports:
+                # A ```file:path``` block was written but there is no executable
+                # block to verify it. Surface "file written" as an observation
+                # instead of a spurious E001, and prompt the model to run/verify.
+                observation = "\n".join(file_reports) + (
+                    f"\nFile written. Call run_python_file('{target_file}') "
+                    "to verify it works, then final_answer(...)."
+                )
                 messages.append({"role": "assistant", "content": output})
                 messages.append({"role": "user", "content": f"Observation:\n{observation}"})
                 continue
