@@ -4,7 +4,7 @@
 
 ```python
 class Tool:
-    name: str          # 函数名，如 "write_file"
+    name: str          # 函数名，如 "read_file"
     description: str   # 文档字符串首段
     func: Callable     # 底层 Python 函数
     inputs: dict       # 输入参数 schema，从类型注解自动提取
@@ -19,8 +19,8 @@ class Tool:
 
 ```python
 @tool
-def write_file(filename: str, content: str) -> str:
-    """Write text content to a file on disk."""
+def run_python_file(filename: str) -> str:
+    """Run a Python script file and capture its output."""
     ...
 ```
 
@@ -36,7 +36,6 @@ def write_file(filename: str, content: str) -> str:
 | 工具 | 签名 | 机制 | 超时 |
 |------|------|------|------|
 | `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 进程内 `open().read()`，默认每行带 `N#HHHH` 哈希标签 | 无 |
-| `write_file` | `write_file(filename, content) -> str` | 进程内 `open().write()` | 无 |
 | `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename])` | 30s |
 | `execute_bash_command` | `execute_bash_command(command) -> str` | `subprocess.run(command, shell=True)` | 30s |
 
@@ -54,7 +53,7 @@ def write_file(filename: str, content: str) -> str:
 - `offset`/`limit` 可读取文件范围（1-indexed）
 
 ### 设计原则
-- `read_file` / `write_file`：本地 I/O，无需隔离
+- `read_file`：本地 I/O，无需隔离
 - `run_python_file` / `execute_bash_command`：走子进程，**这是安全边界**——模型通过 `exec()` 跑的代码不受限，但真正的文件执行、Shell 命令在子进程隔离
 
 ---

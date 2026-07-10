@@ -13,7 +13,7 @@ class Tool:
     """A callable tool with name, description, and input schema.
 
     Attributes:
-        name: Function name, e.g. "write_file".
+        name: Function name, e.g. "read_file".
         description: Docstring or explicit description.
         func: The underlying callable.
         inputs: Input parameter schema dict.

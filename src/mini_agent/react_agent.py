@@ -114,6 +114,7 @@ def write_blocks(
     wrote_any = False
     edit_reports: list[str] = []
     file_reports: list[str] = []
+    wrote_target = False
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
@@ -123,6 +124,8 @@ def write_blocks(
                     print("[write_blocks] Skipping edit block without path", file=sys.stderr)
                 continue
             full_path = os.path.abspath(path)
+            if full_path == os.path.abspath(target_file):
+                wrote_target = True
             result = apply_edit_block(full_path, content)
             edit_reports.append(result)
             wrote_any = True
@@ -149,6 +152,8 @@ def write_blocks(
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
             wrote_any = True
+            if os.path.abspath(full_path) == os.path.abspath(target_file):
+                wrote_target = True
             if lang == "file":
                 file_reports.append(f"Written {full_path}")
             if verbose:
@@ -157,7 +162,7 @@ def write_blocks(
             if verbose:
                 print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
 
-    return wrote_any, edit_reports, file_reports
+    return wrote_any, edit_reports, file_reports, wrote_target
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -324,7 +329,7 @@ def react_loop(
             continue
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports, file_reports = write_blocks(blocks, step, target_file, verbose)
+        wrote_this_step, edit_reports, file_reports, wrote_target = write_blocks(blocks, step, target_file, verbose)
         if wrote_this_step:
             wrote_file = True
 
@@ -393,10 +398,10 @@ def react_loop(
             _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
             continue
 
-        # 5b. Track whether a write_file() call actually executed and persisted
-        # the file. Check execution logs (not just source text) so that merely
-        # MENTIONING write_file (in a comment or malformed call) does not count.
-        if not result.error and result.logs and "Written" in result.logs:
+        # 5b. Track whether the file on disk was actually written this step.
+        # A ```file:```/```edit:``` block writing the target counts (wrote_target);
+        # merely MENTIONING a write in source text does not.
+        if not result.error and wrote_target:
             wrote_file = True
 
         # 5c. No-progress guard: if the model keeps producing steps that neither
@@ -437,7 +442,7 @@ def react_loop(
 
         # 7. Check for final_answer
         if result.is_final_answer:
-            # Guard: a final_answer without ever calling write_file() means the
+            # Guard: a final_answer without the file ever being written means the
             # fix lives only in exec() memory — the file on disk is still buggy.
             if not wrote_file:
                 messages.append({"role": "assistant", "content": output})
@@ -445,23 +450,22 @@ def react_loop(
                     "role": "user",
                     "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=target_file),
                 })
-                _log(verbose, "[final_answer-warning] final_answer without write_file")
+                _log(verbose, "[final_answer-warning] final_answer without writing the file")
                 continue
             _log(verbose, f"\n{'='*20} Done (final_answer) {'='*20}")
             return str(result.output) if result.output is not None else result.logs
 
-        # 7a. Warn if code ran without write_file() — file on disk is NOT fixed.
+        # 7a. Warn if code ran without writing the file — file on disk is NOT fixed.
         # Only warn after step 2 (model should read first, then fix), and do NOT
         # warn on verification steps (run_python_file / execute_bash_command)
         if (
             not result.error
             and not wrote_this_step
-            and "write_file" not in result.tool_calls
             and "run_python_file" not in result.tool_calls
             and "execute_bash_command" not in result.tool_calls
             and step >= 3
         ):
-            read_only = ("open(" in exec_code or ".read(" in exec_code or "read()" in exec_code) and "write_file" not in exec_code
+            read_only = "open(" in exec_code or ".read(" in exec_code or "read()" in exec_code
             # Detect the "assign fixed CODE to a variable but never write" pattern.
             # Only treat as a fix variable if the assigned value looks like code
             # (contains def/import/class/return), NOT plain data like DATA = """...""".
@@ -483,7 +487,7 @@ def react_loop(
                 "role": "user",
                 "content": msg,
             })
-            _log(verbose, f"\n[write_file-warning] {msg}")
+            _log(verbose, f"\n[no-write-warning] {msg}")
             continue
 
         # 8. Add to conversation history

@@ -63,7 +63,7 @@ for step in 1..max_steps:
      最多 3 次，注入 E008 恢复提示
 
   5b. wrote_file 追踪
-     result.tool_calls 中有 "write_file" 或 wrote_this_step → wrote_file = True
+      wrote_target（````file:````/````edit:```` 块写入了 target）→ wrote_file = True
 
   5c. 无进度守卫 (E007)
      verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls

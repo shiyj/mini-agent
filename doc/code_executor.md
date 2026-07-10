@@ -73,18 +73,16 @@ execute_code(code, tools)
 ```python
 from mini_agent import run_deep_agent, get_local_model
 from mini_agent.code_executor import execute_code
-from mini_agent.tools import write_file, run_python_file
+from mini_agent.tools import run_python_file
 
 model = get_local_model("ornith:9b")
 
 # 直接使用（不经过 ReAct 循环）
 code = """
-result = write_file("test.py", "print('hello')")
-print(result)
-output = run_python_file("test.py")
-final_answer(output)
+result = run_python_file("test.py")
+final_answer(result)
 """
-result = execute_code(code, [write_file, run_python_file])
+result = execute_code(code, [run_python_file])
 print(result.logs)
 print(result.is_final_answer)  # True
 ```

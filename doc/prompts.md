@@ -48,9 +48,9 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 | 代码 | 触发条件 | 关键提示内容 |
 |------|---------|-------------|
 | **E001** | `parse_step()` 返回空列表 | 要求模型加 ````python`/````bash` 块 |
-| **E002** | `final_answer()` 但 `wrote_file == False` | 要求先 ````file:path` 或 `write_file()` 保存再 final_answer |
+| **E002** | `final_answer()` 但 `wrote_file == False` | 要求先 ````file:path` 或 ````edit:path` 保存再 final_answer |
 | **E003** | step≥3，代码只读文件未写入 | 要求用 ````file:path` 覆盖文件 |
-| **E004** | step≥3，代码赋值修复内容到变量但未写入 | 要求用 ````file:path` 或 `write_file(content={var})` 写入 |
+| **E004** | step≥3，代码赋值修复内容到变量但未写入 | 要求用 ````file:path` 或 ````edit:path` 写入 |
 | **E005** | step≥3，代码无写入动作（通用） | 要求保存文件而非仅运行/打印 |
 | **E006** | 连续 3 次相同输出 | 要求停止循环，立即 ````file:path` + run_python_file + final_answer |
 | **E007** | 连续 6 步无进度 | 要求保存文件到磁盘 |
@@ -61,7 +61,7 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 
 ## 进度判定关键点
 
-- `wrote_file = True`：本步写入了 ````file:```/````edit:```/````python:```/````bash:``` 块，**或**调用了 `write_file` 工具
+- `wrote_file = True`：本步通过 ````file:````/````edit:```` 块写入了 target 文件
 - `verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls`
 - `made_progress = wrote_this_step or verified or is_final_answer`
 - 验证**仅在已写文件后**算进度（防止反复跑有 bug 文件）

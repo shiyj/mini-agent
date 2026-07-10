@@ -47,40 +47,43 @@ ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
     "E001_NO_CODE": (
         "Error E001: No executable ```python```/```bash``` block found. "
-        "You MUST include a code block that runs. Prefer small, targeted fixes: "
-        "use an ```edit:{target_file}``` block to change just the broken line(s) "
-        "(e.g. fix a typo), then a ```python``` block with "
-        "run_python_file('{target_file}') to verify, then final_answer(...). "
-        "Only rewrite the whole file with a ```file:{target_file}``` block when "
-        "many changes are needed, and always follow it with a run_python_file() "
-        "check."
+        "You MUST include a code block that runs. Prefer a targeted fix: use an "
+        "```edit:{target_file}``` block to change just the broken line, then in a "
+        "SINGLE ```python``` block call run_python_file('{target_file}') AND "
+        "final_answer(...) — both in that same ```python``` block. Only rewrite "
+        "the whole file with a ```file:{target_file}``` block when many changes "
+        "are needed, and always follow it with a run_python_file() check in a "
+        "```python``` block."
     ),
     # E002: called final_answer() but never persisted the fix
     "E002_FINAL_NO_WRITE": (
-        "Warning E002: you called final_answer() but never saved the corrected "
-        "code to disk (target: {target_file}). Use a ```file:{target_file}``` block "
-        "with the raw file content, or call write_file() with the fixed code, then "
-        "run_python_file() to verify, then final_answer()."
+        "Warning E002: you called final_answer() but the corrected file was never "
+        "saved to disk (target: {target_file}). Write the fix NOW using a "
+        "```file:{target_file}``` block (whole file) or an ```edit:{target_file}``` "
+        "block (one line), then run_python_file() to verify, then call "
+        "final_answer() again."
     ),
     # E003: code only read/printed the file, never wrote it
     "E003_WRITE_READONLY": (
-        "Warning E003: You only read/printed the file. You MUST overwrite it with "
-        "the corrected code using a ```file:{target_file}``` block (or write_file()), "
-        "then run_python_file() to verify, then final_answer()."
+        "Warning E003: You only read/printed the file — it is NOT fixed on disk. "
+        "Overwrite it now with a ```file:{target_file}``` block (raw content, no "
+        "escaping) or an ```edit:{target_file}``` block, then run_python_file() to "
+        "verify, then final_answer()."
     ),
     # E004: corrected code was assigned to a variable but never written
     "E004_WRITE_VAR": (
-        "Warning E004: You assigned the corrected code to the variable `{var}` but "
-        "never saved it. Use a ```file:{target_file}``` block with the raw content, "
-        "or call write_file(filename='{target_file}', content={var}) right now to "
-        "persist the fix, then run_python_file() to verify, then final_answer()."
+        "Warning E004: You stored the corrected code in the variable `{var}` but "
+        "never saved it. Write it to disk NOW: use a ```file:{target_file}``` block "
+        "with the raw corrected content, or an ```edit:{target_file}``` block to "
+        "change just that line. Then run_python_file() and final_answer()."
     ),
     # E005: code ran but did not save anything (generic)
     "E005_WRITE_GENERIC": (
-        "Warning E005: Your code ran but did NOT save changes to the file. Running or "
-        "printing code without saving does NOT fix the file on disk. Use a "
-        "```file:{target_file}``` block with the raw content, or write_file() to save "
-        "the corrected code, then run_python_file() to test it, then call final_answer()."
+        "Warning E005: Your code ran but did NOT save changes to the file. Running "
+        "or printing code without saving does NOT fix the file on disk. Write it "
+        "with a ```file:{target_file}``` block (raw content) or an "
+        "```edit:{target_file}``` block, then run_python_file() to test it, then "
+        "call final_answer()."
     ),
     # E006: model emitted identical output 3+ times (stuck in a loop)
     "E006_LOOP": (
@@ -95,26 +98,27 @@ ERROR_PROMPTS = {
         "Warning E007: Stuck — no progress toward fixing the file (no file write/run "
         "in 6 consecutive steps). Save the corrected content to disk using an "
         "```edit:{target_file}``` block for targeted changes, or a "
-        "```file:{target_file}``` block / write_file() for a full rewrite."
+        "```file:{target_file}``` block for a full rewrite."
     ),
     # E009: hash-anchored edit failed because the file changed since read
     "E009_STALE_ANCHOR": (
-        "Error E009: Hash-anchored edit failed — the file changed since your "
-        "last read_file(). Call read_file('{target_file}') to get fresh "
-        "anchors, then retry with an ```edit:{target_file}``` block."
+        "Error E009: Hash-anchored edit failed — the file changed since your last "
+        "read_file() (often because you edited several lines at once, which shifts "
+        "later anchors). Call read_file('{target_file}') to get fresh N#HHHH "
+        "anchors, then retry with a SINGLE ```edit:{target_file}``` block for one "
+        "line, OR rewrite the whole file with a ```file:{target_file}``` block."
     ),
     # E008: the model's OWN generated code failed to compile (SyntaxError),
     # almost always a quote/escape conflict from embedding a whole file
     # inside a Python string literal. Point it at the ```edit: / ```file: block.
     "E008_SYNTAX": (
-        "Error E008: your code had a SyntaxError and did NOT run — almost certainly a "
-        "quote/escape conflict from putting the whole file inside a string. "
-        "STOP using content='...' for multi-line files. Prefer a targeted fix: "
-        "use an ```edit:{target_file}``` block to change just the broken line(s). "
-        "If a full rewrite is truly needed, put the ENTIRE corrected file content "
-        "in a ```file:{target_file}``` block (raw, no quotes, no escaping), then in "
-        "a ```python``` block call run_python_file('{target_file}') and "
-        "final_answer('...')."
+        "Error E008: your code had a SyntaxError and did NOT run. You MUST write files "
+        "ONLY with a ```file:{target_file}``` or ```edit:{target_file}``` block — never by "
+        "putting file content inside a Python string or calling open() from "
+        "a ```python``` block. Put the ENTIRE corrected file in a ```file:{target_file}``` "
+        "block (raw, no quotes, no escaping), then in a ```python``` block call "
+        "run_python_file('{target_file}') and final_answer('...'). For a single-line "
+        "fix, prefer an ```edit:{target_file}``` block."
     ),
 }
 
@@ -131,7 +135,7 @@ def build_deep_system_prompt(
     """Build the system prompt for the deep ReAct agent.
 
     Args:
-        tools: List of available tools (write_file, run_python_file, etc.).
+        tools: List of available tools (read_file, run_python_file, etc.).
         target_file: The file the agent should save scripts to.
 
     Returns:
@@ -140,60 +144,51 @@ def build_deep_system_prompt(
     tool_list = "\n".join(t.to_prompt() for t in tools)
 
     return textwrap.dedent(f"""\
-        You are a Python programmer. Solve tasks by writing and running code.
+        You are a Python programmer. Fix the task by writing and running code.
 
         ## Workflow
-        1. Read the file with read_file() if needed
-        2. Write the corrected file using a ```file:{target_file}``` block (raw content, no escaping)
-           OR edit specific lines with an ```edit:path``` block (see below)
-        3. Run it with run_python_file() in a ```python``` block
-        4. When it works, call final_answer(result) in the SAME ```python``` block
+        1. Read the file with read_file('{target_file}') to see its content and the N#HHHH tags.
+        2. Fix it, then verify and finish:
+           - ONE line to change -> emit an ```edit:{target_file}``` block (copy the N#HHHH anchor).
+           - MANY lines to change -> emit a ```file:{target_file}``` block with the ENTIRE corrected file.
+        3. In a SINGLE ```python``` block: run_python_file('{target_file}') then final_answer("done").
 
-        ## Rules
-        - Write Python/bash code in ```python``` or ```bash``` blocks
-        - **CRITICAL**: To write a file, use a ```file:path``` block with RAW content (no quotes, no escaping).
-        - All ```file:```/```edit:``` blocks are written to disk FIRST, then your first ```python```/```bash``` block runs.
-        - ONLY THE FIRST ```python```/```bash``` block is executed.
-        - ```python:path```/```bash:path``` blocks are also saved to `path` (or /tmp/mini-agent-*.py if no path).
-        - Tool results are automatically printed — no need to call print() yourself.
-        - When code runs successfully, call final_answer() right away.
-        - Do NOT re-run the same code multiple times.
+        ## Rules (MUST follow)
+        - Code goes in fenced blocks: ```python```/```bash``` to RUN, ```file:path``` to write a whole file, ```edit:path``` to change specific lines.
+        - **Files are written ONLY via ```file:path``` / ```edit:path``` blocks. You MUST NOT write files from inside a ```python``` block (no open(), no string assignment of file content).**
+        - All ```file:```/```edit:``` blocks are written to disk FIRST; then ONLY the FIRST ```python```/```bash``` block runs.
+        - When the file runs without error, call final_answer() in the SAME ```python``` block — do NOT re-run the same code.
+        - Tool output is printed automatically; do NOT add print() just to inspect.
 
-        ## How to write a file
-        - To CREATE or FIX a file: use a ```file:path/to/file.py``` block with the EXACT raw content.
-        - To RUN code: use a ```python``` block (only the first one runs).
-        - You can name it: ```python:path/to/run.py``` (also saves a copy there).
-        - Example — fix a bug in {target_file}:
-          ```file:{target_file}
+        ## Fix ONE line (edit:)
+        - read_file('path') shows `12#a3f4 print(x)`. Copy the N#HHHH anchor EXACTLY.
+        - ```edit:path
+          replace 12#a3f4 print(y)
+          ```
+        - Operations: replace, insert_before, insert_after, delete. One operation per line.
+        - **Change only ONE line per ```edit:``` block.** Editing several lines at once invalidates later anchors (Error E009). For multiple fixes, rewrite the whole file with ```file:``` instead.
+
+        ## Fix the WHOLE file (file:)
+        - ```file:{target_file}
           def main():
               records = [1, 2, 3]
               print(sum(records))
           if __name__ == "__main__":
               main()
           ```
+        - Then verify in a ```python``` block:
           ```python
           run_python_file('{target_file}')
           final_answer("Fixed")
           ```
 
-        ## Precise editing (hash-anchored)
-        - read_file('path') returns lines tagged with ``LINE#HASH``, e.g. ``12#a3f4 print(x)``.
-        - To edit specific lines precisely, use an ```edit:path``` block:
-          ```edit:path/to/file.py
-          replace 12#a3f4 print(y)
-          insert_after 15#9abc new_line()
-          delete 20#def0
-          ```
-        - Operations: replace, insert_before, insert_after, delete.
-        - One edit per line; copy the ``N#HHHH`` anchor directly from read_file output.
-        - After editing, use ```python``` with run_python_file() to verify.
-
         ## Tools
         {tool_list}
 
-        ## Important
-        - ALWAYS save the file first (```file:path```/```edit:path``` or write_file())
-        - ALWAYS run the saved file with run_python_file() to verify
-        - ALWAYS call final_answer() when your code works
-        - Never repeat working code
+        ## Common mistakes (do NOT)
+        - Do NOT write files from a ```python``` block (open()/string assignment) -> SyntaxError or no effect. Use a ```file:```/```edit:``` block.
+        - Do NOT put the whole file inside a Python string (e.g. content='...multi-line...') -> SyntaxError. Use a ```file:``` block with raw content.
+        - Do NOT call final_answer() before run_python_file() succeeds.
+        - Do NOT emit more than one ```python``` block expecting all to run — only the FIRST runs.
+        - Do NOT put explanation text inside a code block.
     """)

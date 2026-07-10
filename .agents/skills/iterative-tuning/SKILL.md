@@ -71,9 +71,9 @@ Each row shows what the model *said*, what code it *produced*, which error code 
 | E001 | 3     | 15%         |
 ```
 
-High E005 → model keeps running code without `write_file()`. Consider tightening E005's prompt or increasing `max_steps`.
+High E005 → model keeps running code without writing the file (````file:````/````edit:```` blocks). Consider tightening E005's prompt or increasing `max_steps`.
 
-High E004 → model assigns corrected code to a variable (`FIXED = """…"""`) but never calls `write_file`. If the error message already names the variable but the model still ignores it, the recovery prompt may need restructuring.
+High E004 → model assigns corrected code to a variable (`FIXED = """…"""`) but never writes it to disk via a ````file:````/````edit:```` block. If the error message already names the variable but the model still ignores it, the recovery prompt may need restructuring.
 
 High E006 → model is stuck in a loop (identical output repeatedly). May indicate the recovery prompt (E006) is ineffective, or `max_steps` is too high and the model burns steps.
 
@@ -99,7 +99,7 @@ Before continuing after a failing segment, adjust one parameter at a time and **
 
 **Change:** `prompts.py::ERROR_PROMPTS["E005_WRITE_GENERIC"]`
 **Old:** "Warning E005: Your code ran but did NOT save changes to the file…"
-**New:** "CRITICAL E005: You MUST call write_file() before continuing. Running code without write_file() does NOT fix the file on disk."
+**New:** "CRITICAL E005: You MUST write the file with a ````file:````/````edit:```` block before continuing. Running code without saving it does NOT fix the file on disk."
 **Reason:** E005 triggered in 60% of failed rounds in segment 3 — model ignored the mild warning.
 ```
 

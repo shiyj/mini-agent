@@ -84,7 +84,7 @@ result = run_deep_agent(
 print(result)
 ```
 
-温度建议 `0.4~0.5`，挂载 `write_file` / `run_python_file` / `execute_bash_command` 三个工具。
+温度建议 `0.4~0.5`，挂载 `read_file` / `run_python_file` / `execute_bash_command` 三个工具。
 完整的 ReAct 循环：Write → Run → Observe → Fix → Repeat，直到调用 `final_answer()`。
 
 系统提示词仅 ~30 行（smolagents 默认 174 行），专为小模型优化。
