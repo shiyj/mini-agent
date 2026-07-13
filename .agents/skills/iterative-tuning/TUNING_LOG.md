@@ -172,7 +172,125 @@ Temp bands: 0.0–0.2 25/25 (100%), 0.2–0.4 13/15 (87%), 0.4–0.6 31/32 (**97
   the false E002 on block writes and the multi-line-edit stale-anchor loops.
 - Steps dropped to 3.3 (model now fixes in ~1 write + 1 verify step).
 - **Trade-off:** E008 (SyntaxError) rose 7→15. Hypothesis: the E008 "WRONG"
-  contrast example containing a triple-quoted string assignment may prime the
-  9B model to emit that exact pattern. It is recoverable (retries), contributing
-  to only 5 of the 8 failures. Candidate follow-up: drop the E008 WRONG snippet
-  or replace with a non-code negative statement.
+   contrast example containing a triple-quoted string assignment may prime the
+   9B model to emit that exact pattern. It is recoverable (retries), contributing
+   to only 5 of the 8 failures. Candidate follow-up: drop the E008 WRONG snippet
+   or replace with a non-code negative statement.
+
+---
+
+## 2026-07-13: E008_SYNTAX prompt rewrite (single-parameter change)
+
+**Change:** `prompts.py::ERROR_PROMPTS["E008_SYNTAX"]` only (one parameter at a time).
+**Context:** In the 2026-07-13 100-round run (88% success), E008 was the dominant
+error in failed rounds — the 9B model kept wrapping whole-file content in a
+```python``` string / `open()`, causing SyntaxError. The old E008 prompt said
+"use a ```file:``` block" but was generic; the model was already emitting
+```file:``` blocks yet still embedded content in python strings.
+
+**Old:** "Error E008: your code had a SyntaxError and did NOT run. You MUST write
+files ONLY with a ```file:``` or ```edit:``` block — never by putting file content
+inside a Python string or calling open() from a ```python``` block. Put the ENTIRE
+corrected file in a ```file:``` block (raw, no quotes, no escaping), then in a
+```python``` block call run_python_file() and final_answer()..."
+
+**New:** Hard 3-rule format — (1) ```file:``` block holds ENTIRE raw file, no
+quotes/escaping; (2) the ```python``` block MUST contain ONLY `run_python_file()`
++ `final_answer()` and nothing else; (3) never wrap code in quotes inside a
+```python``` block. Includes a minimal correct ```file:```+```python``` example.
+
+**Reason:** Make the recovery concrete and give a copy-paste-correct pattern
+instead of an abstract instruction. Expect E008 frequency to drop and the
+SyntaxError→recovery loop to converge faster.
+
+**Verification pending:** 100-round re-tune (see INSPECTION_REPORT.md append).
+
+### Re-tune results (100 rounds, varied temp 0.0–0.8, clean tuning_data)
+
+| Metric | Before (88% run) | After E008 fix | Δ |
+|--------|------------------|----------------|---|
+| Success | 88 / 100 (88%) | **95 / 100 (95%)** | **+7pp** |
+| Failed rounds | 12 | **5** | −7 (−58%) |
+| E008 in failed rounds | 6 | **2** | −67% |
+| E001 in failed rounds | 6 | 1 | −5 |
+| E009 in failed rounds | 2 | 1 | −1 |
+| E006 in failed rounds | 1 | 0 | −1 |
+| E008 (round-level, transient) | 8 | 9 | ~flat |
+
+Per-segment success (new): 10,10,9,10,10,10,10,9,10,7 — more stable than before
+(8,9,10,7,10,8,8,9,9,10); no 70% dip except last-segment variance.
+
+### Interpretation
+- The concrete 3-rule E008 prompt reduced E008 in *failed* rounds (6→2) and
+  halved total failures, lifting success 88%→95%. The 9B model responds better
+  to a copy-paste-correct pattern than an abstract "use file: block" rule.
+- Round-level E008 is flat (8→9) because that counts any transient trigger
+  (self-healing); the failed-round signal is what moved.
+- E001 in failed rounds also dropped 6→1 — likely reduced instruction confusion
+  from the clearer E008; sample small, variance possible.
+- Conclusion: change is a clear net win; keep it. Next candidate if pushing
+  higher: address the residual E009 stale-anchor loops (multi-line edits) and
+  the last-segment variance (high-temp give-ups).
+
+---
+
+## 2026-07-13: Narrow temperature sampling 0.0–0.8 → 0.0–0.5 (single-parameter)
+
+**Change:** `iterative_tune.py` line 426 — `random.uniform(0.0, 0.8)` →
+`random.uniform(0.0, 0.5)`. One parameter at a time (F4 from the 07-10 plan).
+Prompt (`E008_SYNTAX` rewrite) and all `react_agent.py` logic unchanged — this
+builds ON TOP of the 95% run, so the new run A/B-compares against 95%.
+
+**Reason:** In the 95% run the only weak segment was S10 (70%) with high-temp
+exploration failures (E008/E009 loops, give-ups). The earlier baseline analysis
+showed the 0.6–0.8 band was consistently weakest. Narrowing the sample to
+0.0–0.5 should remove the high-temp tail and lift the floor.
+
+**Baseline to beat:** 95 / 100 (95%). Report backed up as
+`INSPECTION_REPORT_beforeTempNarrow_*.md`. Verification: 100-round re-tune.
+
+### Re-tune results (100 rounds, temp 0.0–0.5)
+
+| Metric | Baseline (95%, 0–0.8) | After temp-narrow | Δ |
+|--------|------------------------|-------------------|---|
+| Success | 95 / 100 (95%) | **96 / 100 (96%)** | +1pp |
+| Failed rounds | 5 | 4 | −1 |
+| Failed-round E008 | 2 | 2 | ~flat |
+| Failed-round E001 | 1 | 2 | +1 |
+| Failed-round E009 | 1 | 1 | ~flat |
+
+Per-segment (new): 10,10,9,10,8,10,9,10,10,10
+Per-segment (base): 10,10,9,10,10,10,10,9,10,7
+
+### Interpretation
+- Narrowing temp removed the worst high-temp segment (base S10=7 → new S10=10),
+  but a different segment dipped (new S5=8, S7=9). Net only +1pp.
+- Conclusion: the 9B model + this task has effectively **hit a performance floor
+  near 95–96%**. Failures are no longer dominated by one error code — they are
+  spread across E008/E001/E009 with no single cause to attack. Run-to-run
+  variance (~±2pp) now exceeds the gain from any single remaining tweak.
+- Keep temp 0.0–0.5 (it eliminates the 70%-style tail risk at no cost). Further
+  gains would need a different lever: harder task, bigger model, or a structural
+  agent change (not prompt wording). Stop here unless a new failure mode appears.
+
+---
+
+## 2026-07-13: E008_SYNTAX wording — drop the error reason (DO / DON'T only)
+
+**Change:** `prompts.py::ERROR_PROMPTS["E008_SYNTAX"]` only. Removed the diagnostic
+cause sentence ("your code did NOT run — a SyntaxError. You put file content INSIDE
+a ```python``` block...") and kept ONLY the DO / DO-NOT instructions + minimal
+example. Temperature sampling REVERTED to full range 0.0–0.8 (user wants to measure
+the whole temperature domain's effect), so this A/B-compares against the **95% run**
+(full temp 0–0.8 + concrete-3-rule E008). The 96% run (temp 0–0.5) is a separate
+axis and is NOT the baseline here.
+
+**Reason (user request):** the 9B model should get actionable DO/DON'T steps
+without a fault explanation that may prime the exact bad pattern (cf. the earlier
+E008 "WRONG snippet" hypothesis). Test whether dropping the reason changes behavior
+across the FULL temperature range.
+
+**Baseline to beat:** 95 / 100 (95%, full temp). Report backed up as
+`INSPECTION_REPORT_beforeTempNarrow_20260713_1434.md` (the 95% run = full temp +
+old E008 wording). Verification: 100-round re-tune, full temp 0–0.8.
+

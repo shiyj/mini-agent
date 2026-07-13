@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "src"))
 
 from mini_agent import get_local_model, run_deep_agent
 from mini_agent.model import ResponsesModel

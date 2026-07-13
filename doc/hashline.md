@@ -29,12 +29,22 @@ delete 25#1234
 
 | 操作 | 说明 |
 |------|------|
-| `replace` | 用新内容替换锚定行 |
-| `insert_before` | 在锚定行前插入新行 |
-| `insert_after` | 在锚定行后插入新行 |
+| `replace` | 用新内容替换锚定行；若再给一个 `end` 锚点，则替换 `start..end` 含闭区间的**多行** |
+| `insert_before` | 在锚定行前插入新行（可多行） |
+| `insert_after` / `append` | 在锚定行后插入新行（可多行） |
+| `prepend` | 在锚定行前插入新行（可多行，等同 `insert_before`） |
 | `delete` | 删除锚定行 |
 
-每行一条编辑。锚点 `N#HHHH` 从 `read_file()` 输出中直接复制。
+每行一条编辑指令。`replace` 的多行形式：指令行后跟若干行新内容，直到下一条指令或块结束。锚点 `N#HHHH` 从 `read_file()` 输出中直接复制。
+
+多行替换示例（把第 12–15 行整体换成新内容，无需 `file:` 整文件覆盖）：
+
+```
+replace 12#a3f4 15#9abc
+def greet(name):
+    return f"Hello, {name}"
+```
+
 
 ---
 

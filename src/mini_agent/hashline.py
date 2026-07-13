@@ -12,6 +12,16 @@ The `````edit:path`` Markdown block DSL::
     insert_after 20#def0 another()
     delete 25#1234
     ```
+
+To change several consecutive lines at once, give ``replace`` a second
+``end`` anchor — it replaces the inclusive span ``start..end`` with the
+following lines (a multi-line block edit, no full-file rewrite needed)::
+
+    ```edit:path/to/file.py
+    replace 12#a3f4 15#9abc
+    def greet(name):
+        return f"Hello, {name}"
+    ```
 """
 
 from __future__ import annotations
@@ -96,29 +106,76 @@ def _atomic_write(path: str, content: str) -> None:
 
 
 _ANCHOR_RE = re.compile(r"^(\d+)#([0-9a-f]{4})$")
-_EDIT_LINE_RE = re.compile(r"^(\S+)\s+(\d+#[0-9a-f]{4})\s?(.*)$")
+# op <start-anchor> [<end-anchor>]  (inline content, if any, is the rest of
+# the line AFTER the last anchor; exactly one leading space is the separator
+# and is dropped, so indented replacements should use the multi-line form).
+_EDIT_LINE_RE = re.compile(
+    r"^(replace|insert_before|insert_after|delete|append|prepend)\s+"
+    r"(\d+#[0-9a-f]{4})"
+    r"(?:\s+(\d+#[0-9a-f]{4}))?"
+)
+# ops that carry a (possibly multi-line) `lines` payload
+_CONTENT_OPS = {"replace", "insert_before", "insert_after", "append", "prepend"}
 
 
 def _parse_dsl(text: str) -> list[dict]:
     """Parse `````edit:`` block content into a list of edit dicts.
 
-    Each edit dict: ``{"op": str, "anchor": str, "content": str}``.
+    Each edit dict: ``{"op", "anchor", "end", "content"}``.
+
+    - ``replace`` with an optional second ``end`` anchor replaces the inclusive
+      span ``start..end`` with the ``content`` lines (pi-hashline "range replace").
+      With no ``end`` it replaces a single line (or expands it into many lines).
+    - ``insert_before`` / ``insert_after`` / ``append`` / ``prepend`` insert the
+      ``content`` lines at the anchor (``append`` == insert after, ``prepend`` ==
+      insert before).
+    - ``delete`` removes the single anchored line.
+
+    Multi-line payloads: if an op line has no inline content after the anchor(s),
+    every following line up to the next op line is treated as ``content``. This
+    lets one edit rewrite a whole block of consecutive lines without falling back
+    to a full `````file:`` overwrite.
     """
-    VALID_OPS = {"replace", "insert_before", "insert_after", "delete"}
     edits: list[dict] = []
-    for line in text.split("\n"):
-        line_stripped = line.strip()
-        if not line_stripped or line_stripped.startswith("#"):
+    lines = text.split("\n")
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
             continue
         m = _EDIT_LINE_RE.match(line)
         if not m:
+            i += 1
             continue
         op = m.group(1)
         anchor = m.group(2)
-        content = m.group(3)
-        if op not in VALID_OPS:
+        end = m.group(3)
+        rest = line[m.end():]
+        inline = rest[1:] if rest.startswith(" ") else rest
+
+        if op == "delete":
+            edits.append({"op": op, "anchor": anchor, "end": None, "content": ""})
+            i += 1
             continue
-        edits.append({"op": op, "anchor": anchor, "content": content})
+
+        # content ops: replace / insert_before / insert_after / append / prepend
+        if inline:
+            content = inline
+            i += 1
+        else:
+            j = i + 1
+            collected: list[str] = []
+            while j < n and not _EDIT_LINE_RE.match(lines[j]):
+                collected.append(lines[j])
+                j += 1
+            while collected and collected[-1].strip() == "":
+                collected.pop()
+            content = "\n".join(collected)
+            i = j
+        edits.append({"op": op, "anchor": anchor, "end": end, "content": content})
     return edits
 
 
@@ -148,6 +205,9 @@ def apply_edit_block(path: str, dsl_text: str) -> str:
 
     lines = text.split("\n")
     n = len(lines)
+    # Visible line count excludes the trailing empty element produced by a
+    # newline-terminated file (mirrors pi-hashline's visibleLineCount).
+    visible_n = n - 1 if text.endswith("\n") else n
 
     # Build snapshot with context hashes
     snapshot: list[tuple[int, str, str]] = []
@@ -158,15 +218,16 @@ def apply_edit_block(path: str, dsl_text: str) -> str:
         h = _line_hash(prev, curr, nxt)
         snapshot.append((i + 1, h, curr))
 
-    # Validate all anchors against snapshot
-    for edit in edits:
-        m = _ANCHOR_RE.match(edit["anchor"])
+    def _validate(anchor: str, label: str) -> int:
+        m = _ANCHOR_RE.match(anchor)
         if not m:
-            return f"[E_STALE_ANCHOR] Invalid anchor format: {edit['anchor']!r}"
+            raise ValueError(
+                f"[E_STALE_ANCHOR] Invalid anchor format: {anchor!r}"
+            )
         line_no = int(m.group(1))
         expected_hash = m.group(2)
         if line_no < 1 or line_no > n:
-            return (
+            raise ValueError(
                 f"[E_STALE_ANCHOR] Line {line_no} out of range "
                 f"(file has {n} lines)"
             )
@@ -175,51 +236,86 @@ def apply_edit_block(path: str, dsl_text: str) -> str:
             region_start = max(1, line_no - 2)
             region_end = min(n, line_no + 2)
             fresh = _tag_lines_for_range(lines, region_start, region_end)
-            return (
+            raise ValueError(
                 f"[E_STALE_ANCHOR] Line {line_no}#{expected_hash} has changed "
                 f"(now {line_no}#{actual_hash}). "
                 f"Re-read with read_file() and retry.\n"
                 f"Fresh anchors around line {line_no}:\n{fresh}"
             )
+        return line_no
 
-    # Apply edits bottom-up (descending line number) so earlier anchors
-    # are not invalidated by insertions/deletions at higher positions.
-    def _line_no(edit: dict) -> int:
-        m = _ANCHOR_RE.match(edit["anchor"])
-        return int(m.group(1)) if m else 0
+    # Validate every anchor against one snapshot before touching the file.
+    try:
+        for edit in edits:
+            edit["_start"] = _validate(edit["anchor"], "start")
+            if edit["op"] == "replace" and edit.get("end"):
+                end_no = _validate(edit["end"], "end")
+                if end_no < edit["_start"]:
+                    raise ValueError(
+                        f"[E_STALE_ANCHOR] Range start {edit['_start']} must be "
+                        f"<= end {end_no}."
+                    )
+                edit["_end"] = end_no
+            else:
+                edit["_end"] = edit["_start"]
+    except ValueError as ex:
+        return str(ex)
 
-    edits_sorted = sorted(edits, key=_line_no, reverse=True)
+    # Apply edits bottom-up (descending start line) so lower anchors stay valid.
+    edits_sorted = sorted(edits, key=lambda e: e["_start"], reverse=True)
 
     min_affected = n + 1
     max_affected = 0
 
     for edit in edits_sorted:
-        line_no = _line_no(edit)
         op = edit["op"]
-        content = edit["content"]
+        s = edit["_start"]
+        e = edit["_end"]
+        content_lines = edit["content"].split("\n") if edit["content"] else []
 
         if op == "replace":
-            lines[line_no - 1] = content
-            min_affected = min(min_affected, line_no)
-            max_affected = max(max_affected, line_no)
+            if s == 1 and e == visible_n and not content_lines:
+                return (
+                    "[E_STALE_ANCHOR] Refusing to delete the whole file via edit. "
+                    "Use a ```file:``` block to overwrite."
+                )
+            # Replace inclusive span s..e with the new lines.
+            del lines[s - 1:e]
+            for nl in reversed(content_lines):
+                lines.insert(s - 1, nl)
+            lo = s
+            hi = s + len(content_lines) - 1
+        elif op in ("insert_after", "append"):
+            for nl in reversed(content_lines):
+                lines.insert(s, nl)
+            lo = s + 1
+            hi = s + len(content_lines)
+        elif op in ("insert_before", "prepend"):
+            for nl in reversed(content_lines):
+                lines.insert(s - 1, nl)
+            lo = s
+            hi = s + len(content_lines) - 1
         elif op == "delete":
-            del lines[line_no - 1]
-            min_affected = min(min_affected, line_no)
-        elif op == "insert_before":
-            lines.insert(line_no - 1, content)
-            min_affected = min(min_affected, line_no)
-            max_affected = max(max_affected, line_no)
-        elif op == "insert_after":
-            lines.insert(line_no, content)
-            min_affected = min(min_affected, line_no + 1)
-            max_affected = max(max_affected, line_no + 1)
+            if visible_n == 1:
+                return (
+                    "[E_STALE_ANCHOR] Refusing to delete the only line via edit. "
+                    "Use a ```file:``` block to overwrite."
+                )
+            del lines[s - 1]
+            lo = hi = s
+        else:
+            continue
+
+        if content_lines or op == "delete":
+            min_affected = min(min_affected, lo)
+            max_affected = max(max_affected, hi)
 
     # Write back atomically
     new_text = "\n".join(lines)
     try:
         _atomic_write(path, new_text)
-    except Exception as e:
-        return f"Error writing {path}: {e}"
+    except Exception as ex:
+        return f"Error writing {path}: {ex}"
 
     # Return fresh anchors for the affected region
     n_new = len(lines)

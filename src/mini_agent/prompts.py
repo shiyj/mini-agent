@@ -112,13 +112,21 @@ ERROR_PROMPTS = {
     # almost always a quote/escape conflict from embedding a whole file
     # inside a Python string literal. Point it at the ```edit: / ```file: block.
     "E008_SYNTAX": (
-        "Error E008: your code had a SyntaxError and did NOT run. You MUST write files "
-        "ONLY with a ```file:{target_file}``` or ```edit:{target_file}``` block — never by "
-        "putting file content inside a Python string or calling open() from "
-        "a ```python``` block. Put the ENTIRE corrected file in a ```file:{target_file}``` "
-        "block (raw, no quotes, no escaping), then in a ```python``` block call "
-        "run_python_file('{target_file}') and final_answer('...'). For a single-line "
-        "fix, prefer an ```edit:{target_file}``` block."
+        "Error E008 — what to DO and what NOT to do:\n"
+        "DO:\n"
+        "1) Write the file with a ```file:{target_file}``` block ONLY. That block holds "
+        "the ENTIRE corrected file, RAW — no surrounding quotes, no escaping, no triple-quotes.\n"
+        "2) Your ```python``` block must contain ONLY these two lines and NOTHING else:\n"
+        "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```\n"
+        "3) For a single-line fix, use an ```edit:{target_file}``` block instead of a full rewrite.\n"
+        "DO NOT:\n"
+        "- Do NOT put file content inside a ```python``` block (as a string, with open(), "
+        "or wrapped in quotes).\n"
+        "- Do NOT wrap code/text in quotes inside a ```python``` block.\n"
+        "Minimal correct pattern — write the file, then verify:\n"
+        "```file:{target_file}\ndef load_data(source):\n    records = []\n```\n"
+        "then ONLY:\n"
+        "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```"
     ),
 }
 
@@ -160,13 +168,25 @@ def build_deep_system_prompt(
         - When the file runs without error, call final_answer() in the SAME ```python``` block — do NOT re-run the same code.
         - Tool output is printed automatically; do NOT add print() just to inspect.
 
-        ## Fix ONE line (edit:)
+        ## Fix lines (edit:)
         - read_file('path') shows `12#a3f4 print(x)`. Copy the N#HHHH anchor EXACTLY.
-        - ```edit:path
+        - Single line:
+          ```edit:path
           replace 12#a3f4 print(y)
           ```
-        - Operations: replace, insert_before, insert_after, delete. One operation per line.
-        - **Change only ONE line per ```edit:``` block.** Editing several lines at once invalidates later anchors (Error E009). For multiple fixes, rewrite the whole file with ```file:``` instead.
+        - **Multiple consecutive lines:** give `replace` a SECOND `end` anchor
+          (the last line to change) and put the new lines right below it — this
+          replaces the whole block in ONE edit (no `file:` rewrite needed):
+          ```edit:path
+          replace 12#a3f4 15#9abc
+          def greet(name):
+              return f"Hello, {name}"
+          ```
+        - Operations: `replace` (one line, or a `start..end` span), `insert_before`,
+          `insert_after` / `append`, `prepend`, `delete`. One operation per line.
+        - Prefer a targeted `edit:` (single line or `start..end` span) over a full
+          ```file:``` rewrite whenever the change is local — it keeps anchors valid
+          and avoids SyntaxError from rewriting the whole file.
 
         ## Fix the WHOLE file (file:)
         - ```file:{target_file}
