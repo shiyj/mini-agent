@@ -1,18 +1,8 @@
-"""ReAct loop — Thought → Code → Observation cycle.
+#!/usr/bin/env python3
+"""ReAct agent loop with tool use, error recovery, and strict final_answer verification.
 
-Implements the core Thought → Code → Observation cycle:
-1. Send system prompt + task + conversation history to the model
-2. Parse the model's response for markdown blocks
-3. Write all ```file:path```/```python:path```/```bash:path``` blocks to disk
-4. Execute the FIRST ```python```/```bash``` block with injected tools
-5. Feed the observation back to the model
-6. Repeat until final_answer() is called or max_steps reached
-
-Designed for small models (9B): minimal prompt, explicit stop conditions,
-no planning phase.
+All prompt text lives in prompts.py; this file contains only the execution logic.
 """
-
-from __future__ import annotations
 
 import os
 import re
@@ -20,29 +10,21 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
-from .code_executor import ExecutionResult, execute_code
-from .context import ContextCompressor
-from .hashline import apply_edit_block
 from . import prompts
-from .tools import Tool
-from .types import (
-    ChatMessage,
-    MessageRole,
-    TokenUsage,
-    get_clean_message_list,
-    remove_content_after_stop_sequences,
-)
+from .code_executor import ExecutionResult, execute_code
+from .hashline import apply_edit_block
 
 if TYPE_CHECKING:
     from .model import ResponsesModel
-
+    from .tools import Tool
+    from .context_compressor import ContextCompressor
 
 # ---------------------------------------------------------------------------
 # Block parsing
 # ---------------------------------------------------------------------------
 
 # Languages whose block content is executed (as opposed to written to disk).
-_EXECUTABLE_LANGS = {"python", "py", "bash", "sh", "shell"}
+_EXECUTABLE_LANGS = {"python", "py"}
 
 
 def parse_step(text: str) -> list[tuple[str, str | None, str]]:
@@ -56,8 +38,8 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
         content
         ```
 
-    - lang can be any identifier (file, python, py, bash, sh, shell, etc.)
-    - path is optional; if absent for python/bash/sh/shell, the block is saved
+    - lang can be any identifier (file, python, py, etc.)
+    - path is optional; if absent for python, the block is saved
       to a temp file /tmp/mini-agent-{timestamp}-{step}.py for record.
     - Blocks are returned in document order.
 
@@ -88,6 +70,7 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
 # File writing helpers
 # ---------------------------------------------------------------------------
 
+
 def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
@@ -97,20 +80,18 @@ def write_blocks(
 
     - ``file:path`` (or any non-executable lang) -> write raw content to path.
     - ``edit:path`` -> apply hash-anchored edits to the file on disk.
-    - ``python:path`` / ``bash:path`` / ``sh:path`` / ``shell:path`` -> write
-      content to path (also executable).
-    - ``python`` / ``bash`` / ``sh`` / ``shell`` without path -> write to
-      /tmp/mini-agent-{timestamp}-{step}.{ext} for record.
-    - ``file`` / ``edit`` without path -> error (E010_NO_PATH), reported back
+    - ``python:path`` / ``py:path`` -> write content to path (also executable).
+    - ``python`` / ``py`` without path -> write to /tmp/mini-agent-{timestamp}-{step}.py for record.
+    - ``file`` / ``edit`` without path -> error (E011_NO_PATH), reported back
       to the caller so the model can be nudged.
     - All paths resolved relative to CWD; parent dirs created.
 
     Returns:
         (wrote_any, edit_reports, file_reports, path_errors) - ``wrote_any`` is
         True if at least one block was written/edited; ``edit_reports`` is a
-        list of result strings from edit blocks; ``file_reports`` is a list of
-        "written" messages for ``file:`` blocks; ``path_errors`` is a list of
-        error strings for file/edit blocks that had no path.
+        list of result strings from edit blocks (success or stale-anchor errors);
+        ``file_reports`` is a list of "written" messages for ``file:`` blocks;
+        ``path_errors`` is a list of error strings for file/edit blocks that had no path.
     """
     wrote_any = False
     edit_reports: list[str] = []
@@ -121,16 +102,12 @@ def write_blocks(
     for lang, path, content in blocks:
         if lang == "edit":
             if path is None:
-                path_errors.append(f"[E010_NO_PATH] edit block without path")
-                if verbose:
-                    print("[write_blocks] Error: edit block without path", file=sys.stderr)
+                path_errors.append(f"[E011_NO_PATH] edit block without path")
                 continue
             full_path = os.path.abspath(path)
             result = apply_edit_block(full_path, content)
             edit_reports.append(result)
             wrote_any = True
-            if verbose:
-                print(f"[write_blocks] Edited {full_path}: {result[:120]}", file=sys.stderr)
             continue
 
         if path is None:
@@ -140,9 +117,7 @@ def write_blocks(
                 path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
             else:
                 # Non-executable without path - error
-                path_errors.append(f"[E010_NO_PATH] {lang} block without path")
-                if verbose:
-                    print(f"[write_blocks] Error: {lang} block without path", file=sys.stderr)
+                path_errors.append(f"[E011_NO_PATH] {lang} block without path")
                 continue
 
         # Resolve path relative to CWD
@@ -155,11 +130,8 @@ def write_blocks(
             wrote_any = True
             if lang == "file":
                 file_reports.append(f"Written {full_path}")
-            if verbose:
-                print(f"[write_blocks] Wrote {lang} block to {full_path}", file=sys.stderr)
         except Exception as e:
-            if verbose:
-                print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
+            pass  # write failures are not fatal; let the model retry
 
     return wrote_any, edit_reports, file_reports, path_errors
 
@@ -192,11 +164,11 @@ def react_loop(
     system_prompt: str,
     task: str,
     model: "ResponsesModel",
-    tools: list[Tool],
+    tools: list["Tool"],
     max_steps: int = 8,
     max_observation_length: int = 2000,
     verbose: bool = True,
-    compressor: ContextCompressor | None = None,
+    compressor: "ContextCompressor | None" = None,
 ) -> str:
     """Run the ReAct loop until final_answer or max_steps.
 
@@ -219,10 +191,14 @@ def react_loop(
     ]
     recent_outputs: list[str] = []
     consecutive_loops = 0
-    wrote_file = False
-    no_progress = 0
     syntax_warns = 0
     written_path: str | None = None  # path the model wrote this/last step (from its blocks)
+
+    # --- tracking for strict final_answer verification ---
+    has_used_tool = False          # C-rule: at least one tool call before final_answer
+    last_step_had_error = False    # B-rule: previous step had an error
+    no_progress = 0                # no-write/verify progress counter
+    # ---------------------------------------------------
 
     stop_sequences = ["Observation:"]
 
@@ -303,11 +279,11 @@ def react_loop(
             consecutive_loops += 1
             if consecutive_loops >= 3:
                 _log(verbose, "[loop] Stuck after 2 warnings — stopping")
-                return prompts.format_error(prompts.E006_LOOP, target_file=written_path)
+                return prompts.format_error(prompts.E007_LOOP, target_file=written_path)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E006_LOOP, target_file=written_path),
+                "content": prompts.format_error(prompts.E007_LOOP, target_file=written_path),
             })
             _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
             continue
@@ -327,15 +303,16 @@ def react_loop(
 
         # 3. Write ALL file/executable blocks to disk FIRST
         wrote_this_step, edit_reports, file_reports, path_errors = write_blocks(blocks, step, verbose)
-        if wrote_this_step:
-            wrote_file = True
+        # Only file:/edit: blocks count as "writing the target file" -
+        # executable blocks saved to temp files do NOT fix the file on disk.
+        wrote_target = bool(file_reports or edit_reports)
 
         # 3a. Path error detection - file:/edit: block without a path
         if path_errors:
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E010_NO_PATH, target_file=written_path),
+                "content": prompts.format_error(prompts.E011_NO_PATH, target_file=written_path),
             })
             _log(verbose, f"[path-error] {path_errors}")
             continue
@@ -358,7 +335,7 @@ def react_loop(
             })
             continue
 
-        # 4. Find the FIRST executable block (python/bash/sh/shell) to run
+        # 4. Find the FIRST executable block (python) to run
         exec_code = None
         exec_lang = None
         for lang, path, content in blocks:
@@ -407,24 +384,46 @@ def react_loop(
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E008_SYNTAX, target_file=written_path),
+                "content": prompts.format_error(prompts.E010_SYNTAX, target_file=written_path),
             })
             _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
             continue
 
-        # 5b. Track whether the file on disk was actually written this step.
-        # A ```file:```/```edit:``` block writing a file counts (wrote_this_step);
-        # merely MENTIONING a write in source text does not.
-        if not result.error and wrote_this_step:
-            wrote_file = True
+        # --- NEW: track tool usage and error state for final_answer verification ---
+        # C-rule: track if any tool has been called
+        if result.tool_calls:
+            has_used_tool = True
+        # B-rule: track if this step had an error
+        step_had_error = bool(result.error)
+        # Also check tool output for failure indicators
+        if not step_had_error and result.logs:
+            error_indicators = ["FAILED", "Traceback", "Error:", "exit="]
+            if any(ind in result.logs for ind in error_indicators):
+                step_had_error = True
+        # -------------------------------------------------------------------------
+
+        # 5a. SyntaxError recovery
+        if result.error and result.error.startswith("SyntaxError") and syntax_warns < 3:
+            syntax_warns += 1
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E010_SYNTAX, target_file=written_path),
+            })
+            _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
+            continue
+
+        # 5b. Track tool usage for C-rule (final_answer without any prior tool call)
+        if result.tool_calls:
+            has_used_tool = True
 
         # 5c. No-progress guard: if the model keeps producing steps that neither
         # write, verify, nor finalize, it is stuck. Stop early.
         # Verification (run_python_file/execute_bash_command) only counts as
         # progress AFTER a write — running the still-buggy file is not progress.
         verified = "run_python_file" in result.tool_calls or "execute_bash_command" in result.tool_calls
-        made_progress = wrote_this_step or result.is_final_answer
-        if verified and not wrote_file:
+        made_progress = wrote_target or result.is_final_answer
+        if verified and not has_used_tool:
             made_progress = False
         if made_progress:
             no_progress = 0
@@ -432,7 +431,7 @@ def react_loop(
             no_progress += 1
         if no_progress >= 6:
             _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
-            return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=written_path)
+            return prompts.format_error(prompts.E008_NO_PROGRESS, target_file=written_path)
 
         # 6. Build observation
         parts: list[str] = []
@@ -454,27 +453,61 @@ def react_loop(
 
         _log(verbose, f"\nObservation:\n{observation}", limit=500)
 
-        # 7. Check for final_answer
+        # 7. Check for final_answer — STRICT VERIFICATION
         if result.is_final_answer:
-            # Guard: a final_answer without the file ever being written means the
-            # fix lives only in exec() memory — the file on disk is still buggy.
-            if not wrote_file:
+            # --- Rule A (E012): final_answer called together with other tools ---
+            if result.tool_calls:
                 messages.append({"role": "assistant", "content": output})
                 messages.append({
                     "role": "user",
-                    "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=written_path),
+                    "content": prompts.format_error(prompts.E012_FINAL_WITH_TOOLS),
                 })
-                _log(verbose, "[final_answer-warning] final_answer without writing the file")
+                _log(verbose, "[final_answer-guard] Rejected: final_answer with other tools")
                 continue
+
+            # --- Rule B (E003): final_answer after an error in previous step ---
+            if last_step_had_error:
+                # Extract error summary for the message
+                error_summary = result.error or "previous step failed"
+                if not result.error and "logs" in vars(result) and result.logs:
+                    # Check logs for error indicators
+                    for ind in ["FAILED", "Traceback", "Error:", "exit="]:
+                        if ind in result.logs:
+                            # Extract a short snippet
+                            idx = result.logs.find(ind)
+                            error_summary = result.logs[idx:idx+200]
+                            break
+                messages.append({"role": "assistant", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": prompts.format_error(prompts.E003_FINAL_AFTER_ERROR, target_file=error_summary),
+                })
+                _log(verbose, "[final_answer-guard] Rejected: final_answer after error")
+                continue
+
+            # --- Rule C (E002): final_answer without any prior tool use ---
+            if not has_used_tool:
+                messages.append({"role": "assistant", "content": output})
+                messages.append({
+                    "role": "user",
+                    "content": prompts.format_error(prompts.E002_FINAL_NO_ACTION),
+                })
+                _log(verbose, "[final_answer-guard] Rejected: final_answer without any tool use")
+                continue
+
+            # All checks passed — accept final_answer
             _log(verbose, f"\n{'='*20} Done (final_answer) {'='*20}")
             return str(result.output) if result.output is not None else result.logs
+
+        # Update last_step_had_error for next iteration
+        last_step_had_error = step_had_error
 
         # 7a. Warn if code ran without writing the file — file on disk is NOT fixed.
         # Only warn after step 2 (model should read first, then fix), and do NOT
         # warn on verification steps (run_python_file / execute_bash_command)
         if (
             not result.error
-            and not wrote_this_step
+            and not wrote_target
             and "run_python_file" not in result.tool_calls
             and "execute_bash_command" not in result.tool_calls
             and step >= 3
@@ -490,11 +523,11 @@ def react_loop(
                 if re.search(r'\b(def |import |class |return |print\()', val):
                     var = m.group(1)
             if var:
-                code_key = prompts.E004_WRITE_VAR
+                code_key = prompts.E005_WRITE_VAR
             elif read_only:
-                code_key = prompts.E003_WRITE_READONLY
+                code_key = prompts.E004_WRITE_READONLY
             else:
-                code_key = prompts.E005_WRITE_GENERIC
+                code_key = prompts.E006_WRITE_GENERIC
             msg = prompts.format_error(code_key, target_file=written_path, var=var)
             messages.append({"role": "assistant", "content": output})
             messages.append({
@@ -517,3 +550,34 @@ def react_loop(
             return last_obs.split("Execution logs:\n", 1)[1]
 
     return "Max steps reached without final answer"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def get_clean_message_list(messages: list[dict], flatten_messages_as_text: bool = True) -> list[dict]:
+    """Remove internal metadata and flatten content if needed."""
+    cleaned = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if flatten_messages_as_text and isinstance(content, list):
+            # Flatten list of content parts to single string
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+            content = "".join(parts)
+        cleaned.append({"role": msg["role"], "content": content})
+    return cleaned
+
+
+def remove_content_after_stop_sequences(text: str, stop_sequences: list[str]) -> str | None:
+    """Remove everything after the first occurrence of any stop sequence."""
+    if not stop_sequences:
+        return text
+    for seq in stop_sequences:
+        idx = text.find(seq)
+        if idx != -1:
+            return text[:idx]
+    return text
