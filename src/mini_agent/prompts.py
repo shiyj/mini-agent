@@ -180,7 +180,7 @@ def build_deep_system_prompt(
           ```edit:path
           replace 12#a3f4 15#9abc
           def greet(name):
-              return f"Hello, {name}"
+              return f"Hello, {{name}}"
           ```
         - Operations: `replace` (one line, or a `start..end` span), `insert_before`,
           `insert_after` / `append`, `prepend`, `delete`. One operation per line.

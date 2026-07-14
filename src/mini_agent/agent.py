@@ -231,7 +231,6 @@ def run_fast_agent(
 def run_deep_agent(
     prompt: str,
     model: ResponsesModel,
-    target_file: str = "output.py",
     max_steps: int = 8,
     max_observation_length: int = 2000,
     compressor: ContextCompressor | None = None,
@@ -244,7 +243,6 @@ def run_deep_agent(
     Args:
         prompt: Task description.
         model: A ``ResponsesModel`` instance.
-        target_file: File the agent should write its script to.
         max_steps: Maximum ReAct iterations (8-15 recommended).
         max_observation_length: Max characters for observation content (0 = no truncation).
         compressor: Optional context compressor (e.g. SummaryCompressor).
@@ -255,7 +253,7 @@ def run_deep_agent(
     tools = [run_python_file, execute_bash_command, read_file]
 
     # Build the system prompt — all text comes from prompts.py
-    system_prompt = build_deep_system_prompt(tools, target_file=target_file)
+    system_prompt = build_deep_system_prompt(tools)
 
     return react_loop(
         system_prompt=system_prompt,
@@ -266,7 +264,6 @@ def run_deep_agent(
         max_observation_length=max_observation_length,
         verbose=True,
         compressor=compressor,
-        target_file=target_file,
     )
 
 
@@ -274,7 +271,6 @@ def run_deep_agent_with_config(
     prompt: str,
     model_name: str,
     provider_name: str | None = None,
-    target_file: str = "output.py",
     log_file: str | None = None,
     reasoning: dict | None = None,
 ) -> str:
@@ -286,7 +282,6 @@ def run_deep_agent_with_config(
         prompt: Task description.
         model_name: Model identifier (e.g. ``"deepseek-chat"``, ``"gpt-4o"``).
         provider_name: Optional provider name to disambiguate models.
-        target_file: File the agent should write its script to.
         log_file: Optional path to a JSONL log file.
 
     Returns:
@@ -315,7 +310,6 @@ def run_deep_agent_with_config(
     return run_deep_agent(
         prompt=prompt,
         model=model,
-        target_file=target_file,
         max_steps=config.get("max_steps", 8),
         max_observation_length=config.get("max_observation_length", 2000),
         compressor=compressor,

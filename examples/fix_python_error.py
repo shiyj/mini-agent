@@ -29,6 +29,7 @@ LOGS_DIR.mkdir(exist_ok=True)
 parser = argparse.ArgumentParser(description="Fix a buggy Python script using the deep agent.")
 parser.add_argument("--run-id", type=int, default=None, help="Run index for structured logging")
 parser.add_argument("--out-dir", type=str, default=None, help="Directory to store per-run api.jsonl")
+parser.add_argument("--temperature", type=float, default=0.5, help="Temperature for the model")
 args, _ = parser.parse_known_args()
 
 if args.out_dir and args.run_id is not None:
@@ -71,7 +72,7 @@ print("[3/3] Running deep agent ...")
 print("=" * 60)
 
 # The agent receives just one sentence — it reads, fixes, runs, and verifies autonomously
-TASK = f"modify_python.py cannot run, find the problem and fix it."
+TASK = f"{} cannot run, find the problem and fix it."
 
 # Model, base URL, context window, max_steps, observation length and the
 # compressor are all resolved from config/agents.json (entry "ornith:9b"
@@ -81,8 +82,8 @@ result = run_deep_agent_with_config(
     prompt=TASK,
     model_name="ornith:9b",
     provider_name="ollama-local",
-    target_file=str(TARGET),
     log_file=str(LOG_FILE),
+    temperature=args.temperature,
 )
 
 print("=" * 60)

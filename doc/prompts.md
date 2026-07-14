@@ -15,9 +15,10 @@ prefill 配置（`FAST_AGENT_PREFILL` / `FAST_AGENT_PREFILL_TEXT`）也定义在
 
 ## 深思流系统提示词
 
-`build_deep_system_prompt(tools, target_file)` 动态构建，约 35 行，包含：
+`build_deep_system_prompt(tools)` 动态构建，约 35 行，包含：
 
 - **Workflow**：read_file → ````file:path`/````edit:path` 写文件 → ````python` 运行 → final_answer
+  （其中 `path` 是待写入/修复文件的**真实路径**，不要写字面 `path`）
 - **Rules**：先写文件再执行、仅第一个代码块运行、工具自动打印、成功后立即 final_answer
 - **How to write a file**：````file:path` 零转义示例
 - **Precise editing**：````edit:path` 哈希锚点编辑（replace/insert_before/insert_after/delete）

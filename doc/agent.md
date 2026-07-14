@@ -78,15 +78,14 @@ print(result)  # 原始模型输出
 
 ## 深思流
 
-### `run_deep_agent(prompt, model, target_file, max_steps=8, **kwargs) -> str`
+### `run_deep_agent(prompt, model, max_steps=8, **kwargs) -> str`
 
-**完整 ReAct 循环**的便利入口。
+**完整 ReAct 循环**的便利入口。文件路径由模型在代码块（`file:path` / `edit:path`）中自行写出，任务描述里写明要操作的文件即可。
 
 ```python
 result = run_deep_agent(
-    prompt="Write a script that downloads a webpage and extracts all links",
+    prompt="examples/data/modify_python.py cannot run, find the problem and fix it.",
     model=model,
-    target_file="scraper.py",
     max_steps=10,
 )
 print(result)
@@ -94,7 +93,7 @@ print(result)
 
 **内部：**
 ```python
-def run_deep_agent(prompt, model, target_file, max_steps=8, **kwargs):
+def run_deep_agent(prompt, model, max_steps=8, **kwargs):
     model.max_output_tokens = max(model.max_output_tokens, 4096)
     tools = [run_python_file, execute_bash_command, read_file]
 
@@ -105,12 +104,11 @@ def run_deep_agent(prompt, model, target_file, max_steps=8, **kwargs):
         "4. When it works, call final_answer(result)"
 
     return react_loop(
-        system_prompt=build_deep_system_prompt(tools, target_file),
+        system_prompt=build_deep_system_prompt(tools),
         task=task,
         model=model,
         tools=tools,
         max_steps=max_steps,
-        target_file=target_file,
         **kwargs,
     )
 ```
@@ -121,10 +119,9 @@ def run_deep_agent(prompt, model, target_file, max_steps=8, **kwargs):
 
 ```python
 result = run_deep_agent_with_config(
-    prompt="Write a script...",
+    prompt="examples/data/out.py cannot run, find the problem and fix it.",
     model_name="ornith:9b",
     provider_name="ollama-local",  # 可选，从 agents.json 推断
-    target_file="out.py",
     max_steps=10,
     temperature=0.5,
 )
@@ -136,12 +133,11 @@ def run_deep_agent_with_config(
     prompt,
     model_name,
     provider_name=None,
-    target_file="output.py",
     max_steps=8,
     **model_overrides,
 ):
     model = load_agent_config(model_name, provider_name, **model_overrides)
-    return run_deep_agent(prompt, model, target_file, max_steps)
+    return run_deep_agent(prompt, model, max_steps)
 ```
 
 ---
@@ -177,7 +173,6 @@ model = get_local_model("ornith:9b")
 result = run_deep_agent(
     "Download https://example.com and save to page.html",
     model,
-    target_file="page.html",
     tools=[run_python_file, execute_bash_command, fetch_url],
 )
 ```

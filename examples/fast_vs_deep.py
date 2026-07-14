@@ -30,7 +30,6 @@ print("=" * 60)
 deep_result = run_deep_agent(
     prompt=TASK,
     model=deep_model,
-    target_file="/tmp/check_primes.py",
     max_steps=8,
 )
 print(deep_result)

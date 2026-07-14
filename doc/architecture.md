@@ -43,14 +43,14 @@ run_fast_agent(prompt, model)
 ### 深思流
 
 ```
-run_deep_agent(prompt, model, target_file, max_steps)
+run_deep_agent(prompt, model, max_steps)
     │
     ├─ model.max_output_tokens = max(512, 4096)
     ├─ tools = [read_file, run_python_file, execute_bash_command]
     ├─ task = prompt + "IMPORTANT: Follow these steps..."
-    └─ react_loop(task, model, tools, max_steps, target_file)
+    └─ react_loop(task, model, tools, max_steps)
            │
-           ├─ system_prompt = build_deep_system_prompt(tools, target_file)
+           ├─ system_prompt = build_deep_system_prompt(tools)
            ├─ messages = [system, user_task]
            ├─ for step in 1..max_steps:
            │     ├─ model.generate(messages, stop_sequences=["Observation:"])

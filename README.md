@@ -78,7 +78,6 @@ from mini_agent import run_deep_agent
 result = run_deep_agent(
     "Write a script that downloads a webpage and extracts all links",
     model=model,
-    target_file="output.py",
     max_steps=8,
 )
 print(result)

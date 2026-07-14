@@ -97,7 +97,7 @@ from mini_agent import load_agent_config, run_deep_agent
 
 # 指定 provider
 model = load_agent_config("ornith:9b", provider_name="ollama-local")
-run_deep_agent("Write a script...", model, target_file="out.py")
+run_deep_agent("examples/data/out.py cannot run, find the problem and fix it.", model)
 
 # 不指定 provider（自动查找，同名则抛 ValueError）
 model = load_agent_config("gpt-4o")

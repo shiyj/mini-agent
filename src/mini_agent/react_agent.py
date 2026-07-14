@@ -91,9 +91,8 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
 def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
-    target_file: str,
     verbose: bool = False,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], list[str]]:
     """Write all blocks to disk.
 
     - ``file:path`` (or any non-executable lang) → write raw content to path.
@@ -114,7 +113,6 @@ def write_blocks(
     wrote_any = False
     edit_reports: list[str] = []
     file_reports: list[str] = []
-    wrote_target = False
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
@@ -124,8 +122,6 @@ def write_blocks(
                     print("[write_blocks] Skipping edit block without path", file=sys.stderr)
                 continue
             full_path = os.path.abspath(path)
-            if full_path == os.path.abspath(target_file):
-                wrote_target = True
             result = apply_edit_block(full_path, content)
             edit_reports.append(result)
             wrote_any = True
@@ -152,8 +148,6 @@ def write_blocks(
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
             wrote_any = True
-            if os.path.abspath(full_path) == os.path.abspath(target_file):
-                wrote_target = True
             if lang == "file":
                 file_reports.append(f"Written {full_path}")
             if verbose:
@@ -162,7 +156,7 @@ def write_blocks(
             if verbose:
                 print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
 
-    return wrote_any, edit_reports, file_reports, wrote_target
+    return wrote_any, edit_reports, file_reports
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -198,7 +192,6 @@ def react_loop(
     max_observation_length: int = 2000,
     verbose: bool = True,
     compressor: ContextCompressor | None = None,
-    target_file: str = "output.py",
 ) -> str:
     """Run the ReAct loop until final_answer or max_steps.
 
@@ -211,7 +204,6 @@ def react_loop(
         max_observation_length: Max characters for observation content (0 = no truncation).
         verbose: If True, print step progress to stderr.
         compressor: Optional context compressor to bound conversation length.
-        target_file: Path of the file the agent is meant to create/fix.
 
     Returns:
         The final answer string, or an error message.
@@ -225,6 +217,7 @@ def react_loop(
     wrote_file = False
     no_progress = 0
     syntax_warns = 0
+    written_path: str | None = None  # path the model wrote this/last step (from its blocks)
 
     stop_sequences = ["Observation:"]
 
@@ -234,7 +227,6 @@ def react_loop(
         f"model={getattr(model, 'model_name', model)!r}, "
         f"max_steps={max_steps}, "
         f"max_observation_length={max_observation_length}, "
-        f"target_file={target_file!r}, "
         f"compressor={'on' if compressor is not None else 'off'}",
     )
 
@@ -306,11 +298,11 @@ def react_loop(
             consecutive_loops += 1
             if consecutive_loops >= 3:
                 _log(verbose, "[loop] Stuck after 2 warnings — stopping")
-                return prompts.format_error(prompts.E006_LOOP, target_file=target_file)
+                return prompts.format_error(prompts.E006_LOOP, target_file=written_path)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E006_LOOP, target_file=target_file),
+                "content": prompts.format_error(prompts.E006_LOOP, target_file=written_path),
             })
             _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
             continue
@@ -329,9 +321,16 @@ def react_loop(
             continue
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports, file_reports, wrote_target = write_blocks(blocks, step, target_file, verbose)
+        wrote_this_step, edit_reports, file_reports = write_blocks(blocks, step, verbose)
         if wrote_this_step:
             wrote_file = True
+
+        # Track the path the model actually wrote (file:/edit:/executable:path),
+        # so error-recovery prompts and the run instruction can reference it.
+        for lang, p, _ in blocks:
+            if p and (lang == "file" or lang == "edit" or lang in _EXECUTABLE_LANGS):
+                written_path = p
+                break
 
         # 3a. Stale anchor detection — if any edit block hit a hash mismatch,
         # inject E009 recovery prompt and retry
@@ -340,7 +339,7 @@ def react_loop(
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, target_file=target_file),
+                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, target_file=written_path),
             })
             continue
 
@@ -365,7 +364,7 @@ def react_loop(
                 # block to verify it. Surface "file written" as an observation
                 # instead of a spurious E001, and prompt the model to run/verify.
                 observation = "\n".join(file_reports) + (
-                    f"\nFile written. Call run_python_file('{target_file}') "
+                    f"\nFile written. Call run_python_file('{written_path}') "
                     "to verify it works, then final_answer(...)."
                 )
                 messages.append({"role": "assistant", "content": output})
@@ -393,15 +392,15 @@ def react_loop(
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E008_SYNTAX, target_file=target_file),
+                "content": prompts.format_error(prompts.E008_SYNTAX, target_file=written_path),
             })
             _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
             continue
 
         # 5b. Track whether the file on disk was actually written this step.
-        # A ```file:```/```edit:``` block writing the target counts (wrote_target);
+        # A ```file:```/```edit:``` block writing a file counts (wrote_this_step);
         # merely MENTIONING a write in source text does not.
-        if not result.error and wrote_target:
+        if not result.error and wrote_this_step:
             wrote_file = True
 
         # 5c. No-progress guard: if the model keeps producing steps that neither
@@ -418,7 +417,7 @@ def react_loop(
             no_progress += 1
         if no_progress >= 6:
             _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
-            return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=target_file)
+            return prompts.format_error(prompts.E007_NO_PROGRESS, target_file=written_path)
 
         # 6. Build observation
         parts: list[str] = []
@@ -448,7 +447,7 @@ def react_loop(
                 messages.append({"role": "assistant", "content": output})
                 messages.append({
                     "role": "user",
-                    "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=target_file),
+                    "content": prompts.format_error(prompts.E002_FINAL_NO_WRITE, target_file=written_path),
                 })
                 _log(verbose, "[final_answer-warning] final_answer without writing the file")
                 continue
@@ -481,7 +480,7 @@ def react_loop(
                 code_key = prompts.E003_WRITE_READONLY
             else:
                 code_key = prompts.E005_WRITE_GENERIC
-            msg = prompts.format_error(code_key, target_file=target_file, var=var)
+            msg = prompts.format_error(code_key, target_file=written_path, var=var)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",

@@ -20,7 +20,6 @@ def react_loop(
     max_observation_length: int = 2000,
     verbose: bool = True,
     compressor: ContextCompressor | None = None,
-    target_file: str = "output.py",
 ) -> str:
 ```
 
@@ -46,10 +45,10 @@ for step in 1..max_steps:
   3. parse_step(output) → blocks
      空列表 → E001 → continue
 
-   4. write_blocks(blocks, step, target_file)
+   4. write_blocks(blocks, step)
       所有 ```lang[:path]``` 块写入磁盘
       ```edit:path``` 块 → 哈希锚点编辑（校验锚点、自底向上应用）
-      wrote_this_step, edit_reports = write_blocks(...)
+      wrote_this_step, edit_reports, file_reports = write_blocks(blocks, step)
       锚点过期 (E_STALE_ANCHOR) → E009 → continue
 
    5. 执行第一个可执行块
@@ -125,15 +124,14 @@ r"```([A-Za-z0-9_-]+)(?::([^\n]+))?\s*\n(.*?)(?:```|$)"
 
 ---
 
-## write_blocks(blocks, step, target_file, verbose) → (bool, list[str])
+## write_blocks(blocks, step, verbose) → (bool, list[str], list[str])
 
 ```python
 def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
-    target_file: str,
     verbose: bool = False,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], list[str]]:
 ```
 
 **逻辑：**
