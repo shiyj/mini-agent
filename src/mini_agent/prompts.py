@@ -42,6 +42,7 @@ E006_LOOP = "E006_LOOP"
 E007_NO_PROGRESS = "E007_NO_PROGRESS"
 E008_SYNTAX = "E008_SYNTAX"
 E009_STALE_ANCHOR = "E009_STALE_ANCHOR"
+E010_NO_PATH = "E010_NO_PATH"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
@@ -112,10 +113,10 @@ ERROR_PROMPTS = {
     # almost always a quote/escape conflict from embedding a whole file
     # inside a Python string literal. Point it at the ```edit: / ```file: block.
     "E008_SYNTAX": (
-        "Error E008 — what to DO and what NOT to do:\n"
+        "Error E008 - what to DO and what NOT to do:\n"
         "DO:\n"
         "1) Write the file with a ```file:{target_file}``` block ONLY. That block holds "
-        "the ENTIRE corrected file, RAW — no surrounding quotes, no escaping, no triple-quotes.\n"
+        "the ENTIRE corrected file, RAW - no surrounding quotes, no escaping, no triple-quotes.\n"
         "2) Your ```python``` block must contain ONLY these two lines and NOTHING else:\n"
         "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```\n"
         "3) For a single-line fix, use an ```edit:{target_file}``` block instead of a full rewrite.\n"
@@ -123,10 +124,18 @@ ERROR_PROMPTS = {
         "- Do NOT put file content inside a ```python``` block (as a string, with open(), "
         "or wrapped in quotes).\n"
         "- Do NOT wrap code/text in quotes inside a ```python``` block.\n"
-        "Minimal correct pattern — write the file, then verify:\n"
+        "Minimal correct pattern - write the file, then verify:\n"
         "```file:{target_file}\ndef load_data(source):\n    records = []\n```\n"
         "then ONLY:\n"
         "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```"
+    ),
+    # E010: file: or edit: block has no path - the block is useless without one
+    "E010_NO_PATH": (
+        "Error E010: A ```file:``` or ```edit:``` block was found WITHOUT a file path. "
+        "You MUST specify the path in the fence header, like "
+        "```file:{target_file}``` or ```edit:{target_file}```. "
+        "A bare ```file``` or ```edit``` with no path does nothing. "
+        "Rewrite your block with the correct path, then run_python_file() to verify."
     ),
 }
 
@@ -138,13 +147,11 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 
 def build_deep_system_prompt(
     tools: list["Tool"],
-    target_file: str = "output.py",
 ) -> str:
     """Build the system prompt for the deep ReAct agent.
 
     Args:
         tools: List of available tools (read_file, run_python_file, etc.).
-        target_file: The file the agent should save scripts to.
 
     Returns:
         A concise system prompt with workflow, rules, tools, and example.
@@ -155,17 +162,17 @@ def build_deep_system_prompt(
         You are a Python programmer. Fix the task by writing and running code.
 
         ## Workflow
-        1. Read the file with read_file('{target_file}') to see its content and the N#HHHH tags.
+        1. Read the file mentioned in the task with read_file('path') to see its content and the N#HHHH tags.
         2. Fix it, then verify and finish:
-           - ONE line to change -> emit an ```edit:{target_file}``` block (copy the N#HHHH anchor).
-           - MANY lines to change -> emit a ```file:{target_file}``` block with the ENTIRE corrected file.
-        3. In a SINGLE ```python``` block: run_python_file('{target_file}') then final_answer("done").
+           - ONE line to change -> emit an ```edit:path``` block (copy the N#HHHH anchor).
+           - MANY lines to change -> emit a ```file:path``` block with the ENTIRE corrected file.
+        3. In a SINGLE ```python``` block: run_python_file('path') then final_answer("done").
 
         ## Rules (MUST follow)
         - Code goes in fenced blocks: ```python```/```bash``` to RUN, ```file:path``` to write a whole file, ```edit:path``` to change specific lines.
         - **Files are written ONLY via ```file:path``` / ```edit:path``` blocks. You MUST NOT write files from inside a ```python``` block (no open(), no string assignment of file content).**
         - All ```file:```/```edit:``` blocks are written to disk FIRST; then ONLY the FIRST ```python```/```bash``` block runs.
-        - When the file runs without error, call final_answer() in the SAME ```python``` block — do NOT re-run the same code.
+        - When the file runs without error, call final_answer() in the SAME ```python``` block - do NOT re-run the same code.
         - Tool output is printed automatically; do NOT add print() just to inspect.
 
         ## Fix lines (edit:)
@@ -175,7 +182,7 @@ def build_deep_system_prompt(
           replace 12#a3f4 print(y)
           ```
         - **Multiple consecutive lines:** give `replace` a SECOND `end` anchor
-          (the last line to change) and put the new lines right below it — this
+          (the last line to change) and put the new lines right below it - this
           replaces the whole block in ONE edit (no `file:` rewrite needed):
           ```edit:path
           replace 12#a3f4 15#9abc
@@ -185,11 +192,11 @@ def build_deep_system_prompt(
         - Operations: `replace` (one line, or a `start..end` span), `insert_before`,
           `insert_after` / `append`, `prepend`, `delete`. One operation per line.
         - Prefer a targeted `edit:` (single line or `start..end` span) over a full
-          ```file:``` rewrite whenever the change is local — it keeps anchors valid
+          ```file:``` rewrite whenever the change is local - it keeps anchors valid
           and avoids SyntaxError from rewriting the whole file.
 
         ## Fix the WHOLE file (file:)
-        - ```file:{target_file}
+        - ```file:path
           def main():
               records = [1, 2, 3]
               print(sum(records))
@@ -198,7 +205,7 @@ def build_deep_system_prompt(
           ```
         - Then verify in a ```python``` block:
           ```python
-          run_python_file('{target_file}')
+          run_python_file('path')
           final_answer("Fixed")
           ```
 
@@ -209,6 +216,6 @@ def build_deep_system_prompt(
         - Do NOT write files from a ```python``` block (open()/string assignment) -> SyntaxError or no effect. Use a ```file:```/```edit:``` block.
         - Do NOT put the whole file inside a Python string (e.g. content='...multi-line...') -> SyntaxError. Use a ```file:``` block with raw content.
         - Do NOT call final_answer() before run_python_file() succeeds.
-        - Do NOT emit more than one ```python``` block expecting all to run — only the FIRST runs.
+        - Do NOT emit more than one ```python``` block expecting all to run - only the FIRST runs.
         - Do NOT put explanation text inside a code block.
     """)

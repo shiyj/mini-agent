@@ -235,10 +235,10 @@ def run_deep_agent(
     max_observation_length: int = 2000,
     compressor: ContextCompressor | None = None,
 ) -> str:
-    """Deep ReAct: write → run → observe → fix → repeat.
+    """Deep ReAct: write -> run -> observe -> fix -> repeat.
 
     System prompt is built by ``build_deep_system_prompt()`` from
-    ``prompts.py`` — the single source of truth for all prompt text.
+    ``prompts.py`` - the single source of truth for all prompt text.
 
     Args:
         prompt: Task description.
@@ -252,7 +252,7 @@ def run_deep_agent(
     """
     tools = [run_python_file, execute_bash_command, read_file]
 
-    # Build the system prompt — all text comes from prompts.py
+    # Build the system prompt - all text comes from prompts.py
     system_prompt = build_deep_system_prompt(tools)
 
     return react_loop(

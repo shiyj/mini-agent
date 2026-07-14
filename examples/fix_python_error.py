@@ -14,7 +14,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mini_agent import run_deep_agent_with_config
+from mini_agent import get_local_model, run_deep_agent
+from mini_agent.config import load_agent_config
 
 # Work under examples/data/ so the agent edits scripts in a clean directory
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -71,23 +72,41 @@ print("[2/3] Loading model config from config/agents.json ...")
 print("[3/3] Running deep agent ...")
 print("=" * 60)
 
-# The agent receives just one sentence — it reads, fixes, runs, and verifies autonomously
-TASK = f"{} cannot run, find the problem and fix it."
+TASK = f"{TARGET} cannot run, find the problem and fix it."
 
-# Model, base URL, context window, max_steps, observation length and the
-# compressor are all resolved from config/agents.json (entry "ornith:9b"
-# under provider "ollama-local"). provider_name disambiguates when the
-# same model name exists under more than one provider.
-result = run_deep_agent_with_config(
-    prompt=TASK,
-    model_name="ornith:9b",
-    provider_name="ollama-local",
-    log_file=str(LOG_FILE),
+config = load_agent_config("ornith:9b", provider_name="ollama-local")
+model = get_local_model(
+    model_name=config["model_name"],
+    api_base=config["baseURL"],
+    api_key=config.get("apiKey"),
     temperature=args.temperature,
+    max_output_tokens=config["max_output_tokens"],
+    context_window=config["context_window"],
+    log_file=str(LOG_FILE),
+)
+
+result = run_deep_agent(
+    prompt=TASK,
+    model=model,
+    max_steps=config.get("max_steps", 8),
+    max_observation_length=config.get("max_observation_length", 2000),
 )
 
 print("=" * 60)
 print(f"Deep agent result:\n{result}")
+
+# Count steps from log (each request/response pair = 1 step)
+import json  # noqa: E402
+steps = 0
+if LOG_FILE.exists():
+    with open(LOG_FILE) as f:
+        for line in f:
+            try:
+                if json.loads(line).get("direction") == "request":
+                    steps += 1
+            except json.JSONDecodeError:
+                pass
+print(f"STEPS: {steps}")
 
 print("\n" + "-" * 60)
 print("Sanity check: running target file ...")

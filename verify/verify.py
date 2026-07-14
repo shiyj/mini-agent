@@ -131,7 +131,6 @@ def step_deep_agent_loop_optimization() -> None:
                 "4. Verify both produce identical prime sets (both must find 9592 primes)."
             ),
             model=model,
-            target_file=target,
             max_steps=15,
         )
         elapsed = time.time() - start

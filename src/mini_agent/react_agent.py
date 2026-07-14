@@ -92,34 +92,38 @@ def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
     verbose: bool = False,
-) -> tuple[bool, list[str], list[str]]:
+) -> tuple[bool, list[str], list[str], list[str]]:
     """Write all blocks to disk.
 
-    - ``file:path`` (or any non-executable lang) → write raw content to path.
-    - ``edit:path`` → apply hash-anchored edits to the file on disk.
-    - ``python:path`` / ``bash:path`` / ``sh:path`` / ``shell:path`` → write
+    - ``file:path`` (or any non-executable lang) -> write raw content to path.
+    - ``edit:path`` -> apply hash-anchored edits to the file on disk.
+    - ``python:path`` / ``bash:path`` / ``sh:path`` / ``shell:path`` -> write
       content to path (also executable).
-    - ``python`` / ``bash`` / ``sh`` / ``shell`` without path → write to
+    - ``python`` / ``bash`` / ``sh`` / ``shell`` without path -> write to
       /tmp/mini-agent-{timestamp}-{step}.{ext} for record.
+    - ``file`` / ``edit`` without path -> error (E010_NO_PATH), reported back
+      to the caller so the model can be nudged.
     - All paths resolved relative to CWD; parent dirs created.
 
     Returns:
-        (wrote_any, edit_reports, file_reports) — ``wrote_any`` is True if at
-        least one block was written/edited; ``edit_reports`` is a list of result
-        strings from edit blocks (success or stale-anchor errors);
-        ``file_reports`` is a list of "written" messages for ``file:`` blocks,
-        so callers can tell a full-file write apart from an edit step.
+        (wrote_any, edit_reports, file_reports, path_errors) - ``wrote_any`` is
+        True if at least one block was written/edited; ``edit_reports`` is a
+        list of result strings from edit blocks; ``file_reports`` is a list of
+        "written" messages for ``file:`` blocks; ``path_errors`` is a list of
+        error strings for file/edit blocks that had no path.
     """
     wrote_any = False
     edit_reports: list[str] = []
     file_reports: list[str] = []
+    path_errors: list[str] = []
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
         if lang == "edit":
             if path is None:
+                path_errors.append(f"[E010_NO_PATH] edit block without path")
                 if verbose:
-                    print("[write_blocks] Skipping edit block without path", file=sys.stderr)
+                    print("[write_blocks] Error: edit block without path", file=sys.stderr)
                 continue
             full_path = os.path.abspath(path)
             result = apply_edit_block(full_path, content)
@@ -135,9 +139,10 @@ def write_blocks(
                 ext = "py" if lang in {"python", "py"} else "sh"
                 path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
             else:
-                # Non-executable without path — skip (nothing to write)
+                # Non-executable without path - error
+                path_errors.append(f"[E010_NO_PATH] {lang} block without path")
                 if verbose:
-                    print(f"[write_blocks] Skipping {lang} block without path", file=sys.stderr)
+                    print(f"[write_blocks] Error: {lang} block without path", file=sys.stderr)
                 continue
 
         # Resolve path relative to CWD
@@ -156,7 +161,7 @@ def write_blocks(
             if verbose:
                 print(f"[write_blocks] Failed to write {full_path}: {e}", file=sys.stderr)
 
-    return wrote_any, edit_reports, file_reports
+    return wrote_any, edit_reports, file_reports, path_errors
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -321,9 +326,19 @@ def react_loop(
             continue
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports, file_reports = write_blocks(blocks, step, verbose)
+        wrote_this_step, edit_reports, file_reports, path_errors = write_blocks(blocks, step, verbose)
         if wrote_this_step:
             wrote_file = True
+
+        # 3a. Path error detection - file:/edit: block without a path
+        if path_errors:
+            messages.append({"role": "assistant", "content": output})
+            messages.append({
+                "role": "user",
+                "content": prompts.format_error(prompts.E010_NO_PATH, target_file=written_path),
+            })
+            _log(verbose, f"[path-error] {path_errors}")
+            continue
 
         # Track the path the model actually wrote (file:/edit:/executable:path),
         # so error-recovery prompts and the run instruction can reference it.
