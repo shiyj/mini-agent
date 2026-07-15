@@ -33,6 +33,7 @@ ERROR_MEANINGS: dict[str, str] = {
     "E010": "Model's own code failed with SyntaxError (quote/escape conflict)",
     "E011": "```file:``` or ```edit:``` block without a path",
     "E012": "final_answer() called together with other tools in same step",
+    "E013": "```file:``` or ```edit:``` block has an invalid/placeholder path",
 }
 
 

@@ -101,9 +101,6 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
     for m in re.finditer(pattern, text, re.DOTALL):
         lang = m.group(1).lower()
         path = m.group(2).strip() if m.group(2) else None
-        # Validate path — reject placeholders, markdown artifacts, etc.
-        if path is not None and not _is_valid_path(path):
-            path = None
         content = m.group(3)
         # Trim trailing newline from content but keep other whitespace
         content = content.rstrip("\n")
@@ -150,6 +147,9 @@ def write_blocks(
             if path is None:
                 path_errors.append(f"[E011_NO_PATH] edit block without path")
                 continue
+            if not _is_valid_path(path):
+                path_errors.append(f"[E013_INVALID_PATH] edit block has invalid path: {path}")
+                continue
             full_path = os.path.abspath(path)
             result = apply_edit_block(full_path, content)
             edit_reports.append(result)
@@ -169,9 +169,9 @@ def write_blocks(
         # Resolve path relative to CWD
         full_path = os.path.abspath(path)
 
-        # Defensive check: reject paths that slipped through parse_step validation
-        if not _is_valid_path(full_path):
-            path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {full_path}")
+        # Defensive check: reject placeholder paths that look valid after abspath
+        if not _is_valid_path(path):
+            path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {path}")
             continue
 
         try:
@@ -330,11 +330,11 @@ def react_loop(
             consecutive_loops += 1
             if consecutive_loops >= 3:
                 _log(verbose, "[loop] Stuck after 2 warnings — stopping")
-                return prompts.format_error(prompts.E007_LOOP, detail=written_path)
+                return prompts.format_error(prompts.E007_LOOP, detail=written_path or "the file")
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E007_LOOP, detail=written_path),
+                "content": prompts.format_error(prompts.E007_LOOP, detail=written_path or "the file"),
             })
             _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
             continue
@@ -456,10 +456,6 @@ def react_loop(
                 step_had_error = True
         # -------------------------------------------------------------------------
 
-        # 5b. Track tool usage for C-rule (final_answer without any prior tool call)
-        if result.tool_calls:
-            has_used_tool = True
-
         # 5c. No-progress guard: if the model keeps producing steps that neither
         # write, verify, nor finalize, it is stuck. Stop early.
         made_progress = wrote_target or result.is_final_answer
@@ -504,7 +500,7 @@ def react_loop(
                 continue
 
             # --- Rule B (E003): final_answer after an error in previous step ---
-            if last_step_had_error:
+            if last_step_had_error or step_had_error:
                 # Extract error summary for the message
                 error_summary = result.error or "previous step failed"
                 if not result.error and "logs" in vars(result) and result.logs:

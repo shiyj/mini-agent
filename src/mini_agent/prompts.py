@@ -103,11 +103,17 @@ ERROR_PROMPTS = {
     ),
     # E009: hash-anchored edit failed because the file changed since read
     "E009_STALE_ANCHOR": (
-        "Error E009: Hash-anchored edit failed — the file changed since your last "
-        "read_file() (often because you edited several lines at once, which shifts "
-        "later anchors). Call read_file('{detail}') to get fresh N#HHHH "
-        "anchors, then retry with a SINGLE ```edit:{detail}``` block for one "
-        "line, OR rewrite the whole file with a ```file:{detail}``` block."
+        "Error E009: Hash-anchored edit failed — the hash you wrote does not match "
+        "the actual hash of that line. There are TWO possible causes:\n"
+        "1) The file was modified since your last read_file() — call "
+        "read_file('{detail}') to get fresh N#HHHH anchors.\n"
+        "2) You copied the hash WRONG — the N#HHHH must be EXACTLY what "
+        "read_file() shows, character by character. Do NOT make up or guess "
+        "the hash; it is a security check, not a label.\n"
+        "Fix: either re-read the file (case 1) or copy the correct hash from "
+        "the read_file() output (case 2). Then retry with a SINGLE "
+        "```edit:{detail}``` block for one line, or rewrite the whole file "
+        "with a ```file:{detail}``` block."
     ),
     # E010: the model's OWN generated code failed to compile (SyntaxError),
     # almost always a quote/escape conflict from embedding a whole file
@@ -192,7 +198,10 @@ def build_deep_system_prompt(
         - Tool output is printed automatically; do NOT add print() just to inspect.
 
         ## Fix lines (edit:)
-        - read_file('<your_file_path>') shows `12#a3f4 print(x)`. Copy the N#HHHH anchor EXACTLY.
+        - read_file('<your_file_path>') shows `12#a3f4 print(x)`. The `12#a3f4` is a
+          **security hash** computed from the line content + its neighbors. You MUST
+          copy the `N#HHHH` anchor EXACTLY from read_file() output — character by
+          character. Do NOT make up or guess the hash; a wrong hash will be rejected.
         - Single line:
           ```edit:<your_file_path>
           replace 12#a3f4 print(y)
