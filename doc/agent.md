@@ -23,7 +23,6 @@ from mini_agent import (
     # 工具（如需自定义）
     read_file,
     run_python_file,
-    execute_bash_command,
 
     # 配置
     load_agent_config,
@@ -95,7 +94,7 @@ print(result)
 ```python
 def run_deep_agent(prompt, model, max_steps=8, **kwargs):
     model.max_output_tokens = max(model.max_output_tokens, 4096)
-    tools = [run_python_file, execute_bash_command, read_file]
+    tools = [run_python_file, read_file]
 
     task = prompt + "\n\nIMPORTANT: Follow these steps exactly:\n" \
         "1. Write the corrected file using a ```file:...``` block\n" \
@@ -148,7 +147,6 @@ def run_deep_agent_with_config(
 |------|------|------|
 | `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 默认每行带 `N#HHHH` 哈希标签；`raw=True` 返回纯文本；`offset`/`limit` 读取范围 |
 | `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename], timeout=30)` 捕获 stdout/stderr |
-| `execute_bash_command` | `execute_bash_command(command) -> str` | `subprocess.run(command, shell=True, timeout=30)` |
 
 **精准编辑**通过 ````edit:path``` Markdown 块实现（非 Python 工具），见 `doc/tools.md`。
 
@@ -173,7 +171,7 @@ model = get_local_model("ornith:9b")
 result = run_deep_agent(
     "Download https://example.com and save to page.html",
     model,
-    tools=[run_python_file, execute_bash_command, fetch_url],
+    tools=[run_python_file, fetch_url],
 )
 ```
 

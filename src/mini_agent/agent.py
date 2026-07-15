@@ -149,35 +149,6 @@ def run_python_file(filename: str) -> str:
         return f"\u3010Error\u3011{e}"
 
 
-@tool
-def execute_bash_command(command: str) -> str:
-    """Execute a Bash/shell command on the local machine.
-
-    Captures stdout and stderr with a 30-second timeout.
-
-    Args:
-        command: The complete shell command string to execute.
-
-    Returns:
-        A string containing the command output or error details.
-    """
-    try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            return f"\u3010Execution OK\u3011\nOutput:\n{result.stdout}"
-        else:
-            return (
-                f"\u3010Execution FAILED\u3011\n"
-                f"Return code: {result.returncode}\n"
-                f"Stderr:\n{result.stderr}"
-            )
-    except subprocess.TimeoutExpired:
-        return "\u3010System Error\u3011Command timed out after 30 seconds."
-    except Exception as e:
-        return f"\u3010System Error\u3011{e}"
-
 
 # ---------------------------------------------------------------------------
 # 3. Fast agent — direct model call, no ReAct loop
@@ -250,7 +221,7 @@ def run_deep_agent(
     Returns:
         The final agent output after all iterations.
     """
-    tools = [run_python_file, execute_bash_command, read_file]
+    tools = [run_python_file, read_file]
 
     # Build the system prompt - all text comes from prompts.py
     system_prompt = build_deep_system_prompt(tools)

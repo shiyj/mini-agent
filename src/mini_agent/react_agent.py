@@ -542,12 +542,12 @@ def react_loop(
 
         # 7a. Warn if code ran without writing the file — file on disk is NOT fixed.
         # Only warn after step 2 (model should read first, then fix), and do NOT
-        # warn on verification steps (run_python_file / execute_bash_command)
+        # warn on verification or read steps (run_python_file / read_file)
         if (
             not result.error
             and not wrote_target
             and "run_python_file" not in result.tool_calls
-            and "execute_bash_command" not in result.tool_calls
+            and "read_file" not in result.tool_calls
             and step >= 3
         ):
             read_only = "open(" in exec_code or ".read(" in exec_code

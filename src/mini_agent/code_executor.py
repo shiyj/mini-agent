@@ -2,7 +2,7 @@
 
 Uses exec() with injected globals for tool calling and final_answer detection.
 No whitelist, no AST interpreter — just plain Python with full builtins.
-The tools themselves (run_python_file, execute_bash_command) provide process isolation.
+The tools themselves (run_python_file, read_file) provide process isolation.
 """
 
 from __future__ import annotations

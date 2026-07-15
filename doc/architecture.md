@@ -46,7 +46,7 @@ run_fast_agent(prompt, model)
 run_deep_agent(prompt, model, max_steps)
     │
     ├─ model.max_output_tokens = max(512, 4096)
-    ├─ tools = [read_file, run_python_file, execute_bash_command]
+    ├─ tools = [read_file, run_python_file]
     ├─ task = prompt + "IMPORTANT: Follow these steps..."
     └─ react_loop(task, model, tools, max_steps)
            │

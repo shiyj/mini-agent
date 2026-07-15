@@ -65,7 +65,7 @@ for step in 1..max_steps:
       wrote_target（````file:````/````edit:```` 块写入了 target）→ wrote_file = True
 
   5c. 无进度守卫 (E007)
-     verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls
+     verified = "run_python_file" in tool_calls
      made_progress = wrote_this_step or result.is_final_answer
      if verified and not wrote_file: made_progress = False
      连续 6 步无进度 → E007 → return
@@ -185,7 +185,7 @@ _EXECUTABLE_LANGS = {"python", "py", "bash", "sh", "shell"}
 ## 进度判定细节
 
 ```python
-verified = "run_python_file" in result.tool_calls or "execute_bash_command" in result.tool_calls
+verified = "run_python_file" in result.tool_calls
 made_progress = wrote_this_step or result.is_final_answer
 if verified and not wrote_file:
     made_progress = False  # 未写文件前跑测试不算进度

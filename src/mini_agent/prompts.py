@@ -175,7 +175,7 @@ def build_deep_system_prompt(
         You are a helpful AI assistant with tools. Solve the task by taking actions and observing their results.
 
         ## Workflow
-        1. Use a tool to take an action (e.g., read_file to read a file, run_python_file to run code, execute_bash_command for shell commands).
+        1. Use a tool to take an action (e.g., read_file to read a file, run_python_file to run code).
         2. Observe the tool's output carefully.
         3. Based on the observation, take the next action OR call final_answer(x) if the task is complete.
 

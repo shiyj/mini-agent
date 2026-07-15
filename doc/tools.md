@@ -37,7 +37,6 @@ def run_python_file(filename: str) -> str:
 |------|------|------|------|
 | `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 进程内 `open().read()`，默认每行带 `N#HHHH` 哈希标签 | 无 |
 | `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename])` | 30s |
-| `execute_bash_command` | `execute_bash_command(command) -> str` | `subprocess.run(command, shell=True)` | 30s |
 
 ### read_file 的哈希标签
 
@@ -54,7 +53,6 @@ def run_python_file(filename: str) -> str:
 
 ### 设计原则
 - `read_file`：本地 I/O，无需隔离
-- `run_python_file` / `execute_bash_command`：走子进程，**这是安全边界**——模型通过 `exec()` 跑的代码不受限，但真正的文件执行、Shell 命令在子进程隔离
 
 ---
 

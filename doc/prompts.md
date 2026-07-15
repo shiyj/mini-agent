@@ -63,6 +63,5 @@ def format_error(code: str, target_file: str | None = None, var: str | None = No
 ## 进度判定关键点
 
 - `wrote_file = True`：本步通过 ````file:````/````edit:```` 块写入了 target 文件
-- `verified = "run_python_file" in tool_calls or "execute_bash_command" in tool_calls`
 - `made_progress = wrote_this_step or verified or is_final_answer`
 - 验证**仅在已写文件后**算进度（防止反复跑有 bug 文件）
