@@ -30,7 +30,7 @@ FAST_AGENT_PREFILL_TEXT = "```python\n"
 # TARGETED recovery prompt as a user message — NOT by bloating the system
 # prompt. Each failure mode gets exactly ONE stable error code mapping to ONE
 # prompt. `react_agent.py` references these codes so all wording lives here.
-# Use `format_error(code, target_file=..., var=...)` to fill placeholders.
+# Use `format_error(code, detail=...)` to fill placeholders.
 # ---------------------------------------------------------------------------
 # Error-code string constants — use these instead of raw strings
 E001_NO_CODE = "E001_NO_CODE"
@@ -45,6 +45,7 @@ E009_STALE_ANCHOR = "E009_STALE_ANCHOR"
 E010_SYNTAX = "E010_SYNTAX"
 E011_NO_PATH = "E011_NO_PATH"
 E012_FINAL_WITH_TOOLS = "E012_FINAL_WITH_TOOLS"
+E013_INVALID_PATH = "E013_INVALID_PATH"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
@@ -60,53 +61,53 @@ ERROR_PROMPTS = {
     ),
     # E003: final_answer() called after an error in the previous step
     "E003_FINAL_AFTER_ERROR": (
-        "Error E003: Your last action failed: {error}. "
+        "Error E003: Your last action failed: {detail}. "
         "Fix the error before calling final_answer()."
     ),
     # E004_WRITE_READONLY: code only read/printed the file, never wrote it
     "E004_WRITE_READONLY": (
         "Warning E004: You only read/printed the file — it is NOT fixed on disk. "
-        "Overwrite it now with a ```file:{target_file}``` block (raw content, no "
-        "escaping) or an ```edit:{target_file}``` block, then run_python_file() to "
+        "Overwrite it now with a ```file:{detail}``` block (raw content, no "
+        "escaping) or an ```edit:{detail}``` block, then run_python_file() to "
         "verify, then final_answer()."
     ),
     # E005: corrected code was assigned to a variable but never written
     "E005_WRITE_VAR": (
-        "Warning E005: You stored the corrected code in the variable `{var}` but "
-        "never saved it. Write it to disk NOW: use a ```file:{target_file}``` block "
-        "with the raw corrected content, or an ```edit:{target_file}``` block to "
+        "Warning E005: You stored the corrected code in a variable but "
+        "never saved it. Write it to disk NOW: use a ```file:{detail}``` block "
+        "with the raw corrected content, or an ```edit:{detail}``` block to "
         "change just that line. Then run_python_file() and final_answer()."
     ),
     # E006: code ran but did not save anything (generic)
     "E006_WRITE_GENERIC": (
         "Warning E006: Your code ran but did NOT save changes to the file. Running "
         "or printing code without saving does NOT fix the file on disk. Write it "
-        "with a ```file:{target_file}``` block (raw content) or an "
-        "```edit:{target_file}``` block, then run_python_file() to test it, then "
+        "with a ```file:{detail}``` block (raw content) or an "
+        "```edit:{detail}``` block, then run_python_file() to test it, then "
         "call final_answer()."
     ),
     # E007: model emitted identical output 3+ times (stuck in a loop)
     "E007_LOOP": (
         "Warning E007: your last 3 responses were identical — you are stuck in a loop. "
         "Stop exploring or printing. Make a concrete change: use an "
-        "```edit:{target_file}``` block to fix the specific broken line(s), or a "
-        "```file:{target_file}``` block with the corrected content, then "
+        "```edit:{detail}``` block to fix the specific broken line(s), or a "
+        "```file:{detail}``` block with the corrected content, then "
         "run_python_file() to verify, then call final_answer()."
     ),
     # E008: no write/verify/finalize progress for 6 consecutive steps
     "E008_NO_PROGRESS": (
         "Warning E008: Stuck — no progress toward fixing the file (no file write/run "
         "in 6 consecutive steps). Save the corrected content to disk using an "
-        "```edit:{target_file}``` block for targeted changes, or a "
-        "```file:{target_file}``` block for a full rewrite."
+        "```edit:{detail}``` block for targeted changes, or a "
+        "```file:{detail}``` block for a full rewrite."
     ),
     # E009: hash-anchored edit failed because the file changed since read
     "E009_STALE_ANCHOR": (
         "Error E009: Hash-anchored edit failed — the file changed since your last "
         "read_file() (often because you edited several lines at once, which shifts "
-        "later anchors). Call read_file('{target_file}') to get fresh N#HHHH "
-        "anchors, then retry with a SINGLE ```edit:{target_file}``` block for one "
-        "line, OR rewrite the whole file with a ```file:{target_file}``` block."
+        "later anchors). Call read_file('{detail}') to get fresh N#HHHH "
+        "anchors, then retry with a SINGLE ```edit:{detail}``` block for one "
+        "line, OR rewrite the whole file with a ```file:{detail}``` block."
     ),
     # E010: the model's OWN generated code failed to compile (SyntaxError),
     # almost always a quote/escape conflict from embedding a whole file
@@ -114,25 +115,25 @@ ERROR_PROMPTS = {
     "E010_SYNTAX": (
         "Error E010 - what to DO and what NOT to do:\n"
         "DO:\n"
-        "1) Write the file with a ```file:{target_file}``` block ONLY. That block holds "
+        "1) Write the file with a ```file:{detail}``` block ONLY. That block holds "
         "the ENTIRE corrected file, RAW - no surrounding quotes, no escaping, no triple-quotes.\n"
         "2) Your ```python``` block must contain ONLY these two lines and NOTHING else:\n"
-        "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```\n"
-        "3) For a single-line fix, use an ```edit:{target_file}``` block instead of a full rewrite.\n"
+        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```\n"
+        "3) For a single-line fix, use an ```edit:{detail}``` block instead of a full rewrite.\n"
         "DO NOT:\n"
         "- Do NOT put file content inside a ```python``` block (as a string, with open(), "
         "or wrapped in quotes).\n"
         "- Do NOT wrap code/text in quotes inside a ```python``` block.\n"
         "Minimal correct pattern - write the file, then verify:\n"
-        "```file:{target_file}\ndef load_data(source):\n    records = []\n```\n"
+        "```file:{detail}\ndef load_data(source):\n    records = []\n```\n"
         "then ONLY:\n"
-        "```python\nrun_python_file('{target_file}')\nfinal_answer('done')\n```"
+        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```"
     ),
     # E011: file: or edit: block has no path - the block is useless without one
     "E011_NO_PATH": (
         "Error E011: A ```file:``` or ```edit:``` block was found WITHOUT a file path. "
         "You MUST specify the path in the fence header, like "
-        "```file:{target_file}``` or ```edit:{target_file}```. "
+        "```file:<your_file_path>``` or ```edit:<your_file_path>```. "
         "A bare ```file``` or ```edit``` with no path does nothing. "
         "Rewrite your block with the correct path, then run_python_file() to verify."
     ),
@@ -141,12 +142,20 @@ ERROR_PROMPTS = {
         "Error E012: You called final_answer() together with other tools. "
         "First run your tools and observe the results, then call final_answer() ALONE in the next step."
     ),
+    # E013: file: or edit: block has a path that looks like a placeholder or is invalid
+    "E013_INVALID_PATH": (
+        "Error E013: A ```file:``` or ```edit:``` block has an invalid path. "
+        "The path contained placeholder text (e.g. <your_file_path>), "
+        "markdown artifacts, or is otherwise not a valid file path. "
+        "You MUST specify a real file path like ```file:<your_file_path>``` "
+        "or ```edit:<your_file_path>```. Fix the path and try again."
+    ),
 }
 
 
-def format_error(code: str, target_file: str | None = None, var: str | None = None) -> str:
-    """Return the recovery prompt for ``code``, filling ``{target_file}``/``{var}``."""
-    return ERROR_PROMPTS[code].format(target_file=target_file or "", var=var or "")
+def format_error(code: str, detail: str | None = None) -> str:
+    """Return the recovery prompt for ``code``, filling ``{detail}``."""
+    return ERROR_PROMPTS[code].format(detail=detail or "")
 
 
 def build_deep_system_prompt(

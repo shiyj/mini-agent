@@ -26,6 +26,49 @@ if TYPE_CHECKING:
 # Languages whose block content is executed (as opposed to written to disk).
 _EXECUTABLE_LANGS = {"python", "py"}
 
+# Known placeholder patterns that should never be treated as real file paths.
+_PLACEHOLDER_PATTERNS = re.compile(
+    r"^(<[^>]*>|your_file_path|path_to_file|path|file_path|"
+    r"file_name|filename|output_file|target_file|"
+    r"destination|output_path|save_path|write_path"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _is_valid_path(path: str) -> bool:
+    """Return True if *path* looks like a real file path, not a placeholder.
+
+    Rejects:
+    - Angle-bracket placeholders: ``<your_file_path>``, ``<path>``
+    - Markdown / quote artifacts: backtick, double-quote, single-quote
+    - Empty or whitespace-only strings
+    - Control characters
+    - Known placeholder words (``your_file_path``, ``path_to_file``, etc.)
+    """
+    if not path or not path.strip():
+        return False
+
+    stripped = path.strip()
+
+    # Reject if contains angle brackets (placeholder indicators)
+    if "<" in stripped or ">" in stripped:
+        return False
+
+    # Reject if contains markdown or quote artifacts
+    if "`" in stripped or '"' in stripped or "'" in stripped:
+        return False
+
+    # Reject if contains ASCII control characters
+    if any(ord(c) < 32 for c in stripped):
+        return False
+
+    # Reject known placeholder words
+    if _PLACEHOLDER_PATTERNS.match(stripped):
+        return False
+
+    return True
+
 
 def parse_step(text: str) -> list[tuple[str, str | None, str]]:
     """Parse one model turn into a list of (lang, path, content) blocks.
@@ -58,6 +101,9 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
     for m in re.finditer(pattern, text, re.DOTALL):
         lang = m.group(1).lower()
         path = m.group(2).strip() if m.group(2) else None
+        # Validate path — reject placeholders, markdown artifacts, etc.
+        if path is not None and not _is_valid_path(path):
+            path = None
         content = m.group(3)
         # Trim trailing newline from content but keep other whitespace
         content = content.rstrip("\n")
@@ -122,6 +168,11 @@ def write_blocks(
 
         # Resolve path relative to CWD
         full_path = os.path.abspath(path)
+
+        # Defensive check: reject paths that slipped through parse_step validation
+        if not _is_valid_path(full_path):
+            path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {full_path}")
+            continue
 
         try:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -279,11 +330,11 @@ def react_loop(
             consecutive_loops += 1
             if consecutive_loops >= 3:
                 _log(verbose, "[loop] Stuck after 2 warnings — stopping")
-                return prompts.format_error(prompts.E007_LOOP, target_file=written_path)
+                return prompts.format_error(prompts.E007_LOOP, detail=written_path)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E007_LOOP, target_file=written_path),
+                "content": prompts.format_error(prompts.E007_LOOP, detail=written_path),
             })
             _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
             continue
@@ -307,12 +358,15 @@ def react_loop(
         # executable blocks saved to temp files do NOT fix the file on disk.
         wrote_target = bool(file_reports or edit_reports)
 
-        # 3a. Path error detection - file:/edit: block without a path
+        # 3a. Path error detection - file:/edit: block without a path or invalid path
         if path_errors:
             messages.append({"role": "assistant", "content": output})
+            # Determine which error prompt to use based on the error code
+            has_invalid_path = any(e.startswith("[E013") for e in path_errors)
+            error_code = prompts.E013_INVALID_PATH if has_invalid_path else prompts.E011_NO_PATH
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E011_NO_PATH, target_file=written_path),
+                "content": prompts.format_error(error_code),
             })
             _log(verbose, f"[path-error] {path_errors}")
             continue
@@ -331,7 +385,7 @@ def react_loop(
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, target_file=written_path),
+                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, detail=written_path),
             })
             continue
 
@@ -384,7 +438,7 @@ def react_loop(
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E010_SYNTAX, target_file=written_path),
+                "content": prompts.format_error(prompts.E010_SYNTAX, detail=written_path),
             })
             _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
             continue
@@ -402,36 +456,20 @@ def react_loop(
                 step_had_error = True
         # -------------------------------------------------------------------------
 
-        # 5a. SyntaxError recovery
-        if result.error and result.error.startswith("SyntaxError") and syntax_warns < 3:
-            syntax_warns += 1
-            messages.append({"role": "assistant", "content": output})
-            messages.append({
-                "role": "user",
-                "content": prompts.format_error(prompts.E010_SYNTAX, target_file=written_path),
-            })
-            _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
-            continue
-
         # 5b. Track tool usage for C-rule (final_answer without any prior tool call)
         if result.tool_calls:
             has_used_tool = True
 
         # 5c. No-progress guard: if the model keeps producing steps that neither
         # write, verify, nor finalize, it is stuck. Stop early.
-        # Verification (run_python_file/execute_bash_command) only counts as
-        # progress AFTER a write — running the still-buggy file is not progress.
-        verified = "run_python_file" in result.tool_calls or "execute_bash_command" in result.tool_calls
         made_progress = wrote_target or result.is_final_answer
-        if verified and not has_used_tool:
-            made_progress = False
         if made_progress:
             no_progress = 0
         else:
             no_progress += 1
         if no_progress >= 6:
             _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
-            return prompts.format_error(prompts.E008_NO_PROGRESS, target_file=written_path)
+            return prompts.format_error(prompts.E008_NO_PROGRESS, detail=written_path)
 
         # 6. Build observation
         parts: list[str] = []
@@ -480,7 +518,7 @@ def react_loop(
                 messages.append({"role": "assistant", "content": output})
                 messages.append({
                     "role": "user",
-                    "content": prompts.format_error(prompts.E003_FINAL_AFTER_ERROR, target_file=error_summary),
+                    "content": prompts.format_error(prompts.E003_FINAL_AFTER_ERROR, detail=error_summary),
                 })
                 _log(verbose, "[final_answer-guard] Rejected: final_answer after error")
                 continue
@@ -512,7 +550,7 @@ def react_loop(
             and "execute_bash_command" not in result.tool_calls
             and step >= 3
         ):
-            read_only = "open(" in exec_code or ".read(" in exec_code or "read()" in exec_code
+            read_only = "open(" in exec_code or ".read(" in exec_code
             # Detect the "assign fixed CODE to a variable but never write" pattern.
             # Only treat as a fix variable if the assigned value looks like code
             # (contains def/import/class/return), NOT plain data like DATA = """...""".
@@ -528,7 +566,7 @@ def react_loop(
                 code_key = prompts.E004_WRITE_READONLY
             else:
                 code_key = prompts.E006_WRITE_GENERIC
-            msg = prompts.format_error(code_key, target_file=written_path, var=var)
+            msg = prompts.format_error(code_key, detail=written_path)
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
