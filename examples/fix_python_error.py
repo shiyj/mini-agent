@@ -41,6 +41,8 @@ else:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     LOG_FILE = LOGS_DIR / f"fix_python_error_{timestamp}.jsonl"
 
+print(f"LOG_FILE: {LOG_FILE}")
+
 print("=" * 60)
 print("mini-agent  Fix Python Error Demo")
 print("=" * 60)
