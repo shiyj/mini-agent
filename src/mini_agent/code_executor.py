@@ -24,12 +24,16 @@ class ExecutionResult:
         logs: str,
         is_final_answer: bool,
         error: str | None = None,
+        error_type: str | None = None,
         tool_calls: list[str] | None = None,
     ):
         self.output = output
         self.logs = logs
         self.is_final_answer = is_final_answer
         self.error = error
+        # Exception class name, e.g. "SyntaxError", "IndentationError", "NameError".
+        # Lets callers match syntax-error subclasses without string parsing.
+        self.error_type = error_type
         self.tool_calls = tool_calls or []
 
     def __repr__(self) -> str:
@@ -106,19 +110,14 @@ def execute_code(
             logs=logs,
             is_final_answer=got_final_answer[0],
             error=f"{type(e).__name__}: {e}\n{tb}",
+            error_type=type(e).__name__,
             tool_calls=called,
         )
     finally:
         sys.stdout = old_stdout
 
     logs = captured.getvalue()
-
-    # If final_answer was called, use its value
-    if got_final_answer[0]:
-        output = final_answer_value[0]
-    else:
-        # Try to get the last expression value (like REPL)
-        output = exec_ns.get("_", None)
+    output = final_answer_value[0] if got_final_answer[0] else None
 
     return ExecutionResult(
         output=output,

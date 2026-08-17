@@ -25,6 +25,13 @@ if TYPE_CHECKING:
 # Languages whose block content is executed (as opposed to written to disk).
 _EXECUTABLE_LANGS = {"python", "py"}
 
+# Structured failure markers emitted by the built-in tools. We match on these
+# rather than loose substrings like "Error:" / "exit=" because a script's own
+# *normal* output can contain those words and would otherwise false-positive.
+#   run_python_file -> "【FAILED exit=N】", "【Timeout】", "【Error】"
+#   read_file       -> "Error reading ..."
+_ERROR_MARKERS = ("【FAILED", "【Timeout", "【Error", "Error reading", "Traceback")
+
 
 def parse_step(text: str) -> list[tuple[str, str | None, str]]:
     """Parse one model turn into a list of (lang, path, content) blocks.
@@ -86,9 +93,8 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
 def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
-    verbose: bool = False,
     fallback_path: str | None = None,
-) -> tuple[bool, list[str], list[str]]:
+) -> tuple[list[str], list[str]]:
     """Write all blocks to disk.
 
     - ``file:path`` -> write raw content to path (whole-file rewrite).
@@ -103,12 +109,11 @@ def write_blocks(
             has a real path, use this as fallback.
 
     Returns:
-        (wrote_any, file_reports, path_errors) - ``wrote_any`` is True if at
-        least one block was written; ``file_reports`` lists "written" messages
+        (file_reports, path_errors) - ``file_reports`` lists "written" messages
         for ``file:`` blocks; ``path_errors`` lists error strings for blocks
-        that had no path, a placeholder path, or used the unsupported ``edit:``.
+        that had no path, a placeholder/invalid path, used the unsupported
+        ``edit:``, or failed to write.
     """
-    wrote_any = False
     file_reports: list[str] = []
     path_errors: list[str] = []
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -122,44 +127,71 @@ def write_blocks(
         if path is None:
             if lang in _EXECUTABLE_LANGS:
                 # Save executable blocks without path to temp for record
-                ext = "py" if lang in {"python", "py"} else "sh"
-                path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
+                path = f"/tmp/mini-agent-{ts}-{step}.py"
             else:
                 # Non-executable without path - error
                 path_errors.append(f"[E011] {lang} block without path")
                 continue
 
-        # Placeholder paths (e.g. <your_file_path>) are mistakes — try to recover
-        if "<your_file_path>" in (path or ""):
+        real = _clean_path(path)
+        if real is None:
+            # Placeholder path (e.g. <path> copied from the prompt) -
+            # try to recover a real path from other blocks or the last step.
             real = _find_real_path(blocks, fallback_path)
-            if real:
-                path = real
-            else:
+            if real is None:
                 path_errors.append(f"[E013] {lang} block has invalid path: {path}")
                 continue
 
-        full_path = os.path.abspath(path)
+        full_path = os.path.abspath(real)
 
         try:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            wrote_any = True
             if lang == "file":
                 file_reports.append(f"Written {full_path}")
-        except Exception:
-            pass  # write failures are not fatal; let the model retry
+        except Exception as e:
+            # Surface write failures - swallowing them silently would leave
+            # the model running a stale file it thinks it just wrote.
+            path_errors.append(f"[E012] Failed to write {full_path}: {e}")
 
-    return wrote_any, file_reports, path_errors
+    return file_reports, path_errors
+
+
+# Placeholder words a small model may copy verbatim instead of a real path.
+_PLACEHOLDER_PATH_RE = re.compile(
+    r"^(<[^>]*>|path|file_path|filename|your_file_path)$",
+    re.IGNORECASE,
+)
+
+
+def _clean_path(path: str) -> str | None:
+    """Return a cleaned file path, or None if it is a placeholder/artifact.
+
+    Strips whitespace and wrapping quotes/backticks (markdown artifacts);
+    rejects angle-bracket placeholders, empty strings, and control characters.
+    """
+    p = path.strip().strip("`'\"").strip()
+    if not p or "<" in p or ">" in p:
+        return None
+    if any(ord(c) < 32 for c in p):
+        return None
+    if _PLACEHOLDER_PATH_RE.match(p):
+        return None
+    return p
 
 
 def _find_real_path(blocks: list[tuple[str, str | None, str]], fallback: str | None = None) -> str | None:
-    """Find a real file path from other blocks, for auto-replacing ``<your_file_path>``."""
+    """Find a real file path from other blocks, for recovering placeholder paths."""
     for _, p, _ in blocks:
-        if p and "<your_file_path>" not in p:
-            return p
+        if p:
+            cleaned = _clean_path(p)
+            if cleaned:
+                return cleaned
     if fallback:
-        return fallback
+        cleaned = _clean_path(fallback)
+        if cleaned:
+            return cleaned
     return None
 
 
@@ -216,7 +248,7 @@ def react_loop(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
     ]
-    recent_outputs: list[str] = []
+    last_output: str | None = None
     syntax_warns = 0
     written_path: str | None = None  # path the model wrote this/last step (from its blocks)
 
@@ -271,38 +303,18 @@ def react_loop(
                     f"[token-compress] {before} -> {len(messages)} messages",
                 )
 
-        # 1. Call the model
-        cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
-        api_messages: list[dict] = []
-        for msg in cleaned:
-            role = msg["role"]
-            content = msg["content"]
-            if isinstance(content, list):
-                parts = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(item.get("text", ""))
-                content = "".join(parts)
-            api_messages.append({"role": role, "content": content})
-
-        response = model.generate(
-            messages=[
-                {"role": m["role"], "content": [{"type": "text", "text": m["content"]}]}
-                for m in api_messages
-            ],
-            stop_sequences=stop_sequences,
-        )
+        # 1. Call the model. generate() accepts plain string content and cleans
+        # merges consecutive same-role messages internally, so pass `messages`
+        # directly (no pre-flatten / post-wrap needed).
+        response = model.generate(messages=messages, stop_sequences=stop_sequences)
 
         output = response.content or ""
-
-        # Apply stop sequences
-        output = remove_content_after_stop_sequences(output, stop_sequences) or output
 
         _log(verbose, f"Model output:\n{output}", limit=500)
 
         # 2a. Loop detection — a step identical to the previous one means the model
         # is stuck. Nudge it once toward the ```file: rewrite path.
-        if recent_outputs and output == recent_outputs[-1]:
+        if last_output is not None and output == last_output:
             nudge = (
                 "Warning: your output matches the previous step — you appear to be stuck. "
                 "Rewrite the whole file with a "
@@ -312,7 +324,7 @@ def react_loop(
             messages.append({"role": "user", "content": nudge})
             _log(verbose, "[loop] Identical output — nudging once")
             continue
-        recent_outputs.append(output)
+        last_output = output
 
         # 2. Parse the step: all blocks
         blocks = parse_step(output)
@@ -339,7 +351,7 @@ def react_loop(
         no_code_counter = 0
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        _, file_reports, path_errors = write_blocks(blocks, step, verbose, written_path)
+        file_reports, path_errors = write_blocks(blocks, step, written_path)
         wrote_target = bool(file_reports)
 
         # 3a. Path error — a file:/edit: block had no path or a placeholder path.
@@ -395,10 +407,14 @@ def react_loop(
 
         result = execute_code(exec_code, tools)
 
-        # 5a. SyntaxError recovery — the model's own code failed to compile,
-        # usually a quote/escape clash from embedding the whole file in a string.
-        # Nudge it to the ```file:path``` rewrite path.
-        if result.error and result.error.startswith("SyntaxError") and syntax_warns < 3:
+        # 5a. SyntaxError/IndentationError recovery — the model's own code
+        # failed to compile, usually a quote/escape clash from embedding a whole
+        # file in a string. Nudge it toward the ```file:path``` rewrite path.
+        if (
+            result.error
+            and result.error_type in {"SyntaxError", "IndentationError", "TabError"}
+            and syntax_warns < 3
+        ):
             syntax_warns += 1
             messages.append({"role": "assistant", "content": output})
             messages.append({
@@ -417,11 +433,11 @@ def react_loop(
         if result.tool_calls or wrote_target:
             has_used_tool = True
 
-        # B-rule: track if this step had an error
+        # B-rule: track if this step had an error (structured tool markers, not
+        # loose substrings, so normal output mentioning "Error:" doesn't count).
         step_had_error = bool(result.error)
         if not step_had_error and result.logs:
-            error_indicators = ["FAILED", "Traceback", "Error:", "exit="]
-            if any(ind in result.logs for ind in error_indicators):
+            if any(marker in result.logs for marker in _ERROR_MARKERS):
                 step_had_error = True
 
         # 5c. No-progress guard: steps that neither write nor finalize mean the
@@ -462,8 +478,8 @@ def react_loop(
             if last_step_had_error or step_had_error:
                 error_summary = result.error or "previous step failed"
                 if not result.error and result.logs:
-                    for ind in ["FAILED", "Traceback", "Error:", "exit="]:
-                        idx = result.logs.find(ind)
+                    for marker in _ERROR_MARKERS:
+                        idx = result.logs.find(marker)
                         if idx != -1:
                             error_summary = result.logs[idx:idx+200]
                             break
@@ -522,32 +538,6 @@ def react_loop(
     return "Max steps reached without final answer"
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def get_clean_message_list(messages: list[dict], flatten_messages_as_text: bool = True) -> list[dict]:
-    """Remove internal metadata and flatten content if needed."""
-    cleaned = []
-    for msg in messages:
-        content = msg.get("content", "")
-        if flatten_messages_as_text and isinstance(content, list):
-            # Flatten list of content parts to single string
-            parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    parts.append(part.get("text", ""))
-            content = "".join(parts)
-        cleaned.append({"role": msg["role"], "content": content})
-    return cleaned
-
-
-def remove_content_after_stop_sequences(text: str, stop_sequences: list[str]) -> str | None:
-    """Remove everything after the first occurrence of any stop sequence."""
-    if not stop_sequences:
-        return text
-    for seq in stop_sequences:
-        idx = text.find(seq)
-        if idx != -1:
-            return text[:idx]
-    return text
+# Helpers ---------------------------------------------------------------
+# get_clean_message_list / remove_content_after_stop_sequences are defined
+# in types.py (single source of truth) and used by model.generate().
