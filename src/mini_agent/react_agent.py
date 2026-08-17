@@ -7,7 +7,6 @@ All prompt text lives in prompts.py; this file contains only the execution logic
 import os
 import re
 import sys
-import time
 from typing import TYPE_CHECKING
 
 from . import prompts
@@ -48,10 +47,12 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
     text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|.*?\|>', '', text)
 
-    # Normalize: ```python\nfile:path → correct fence
+    # Normalize: ```python\nfile:path (or edit:path) -> correct fence.
+    # edit: is unsupported, but normalizing it routes the block to the E000
+    # "rewrite the whole file" nudge instead of a confusing NameError at exec.
     text = re.sub(
-        r'```python\s*\nfile:([^\n]+)',
-        r'```file:\1',
+        r'```python\s*\n(file|edit):([^\n]+)',
+        r'```\1:\2',
         text,
         flags=re.MULTILINE,
     )
@@ -92,7 +93,6 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
 
 def write_blocks(
     blocks: list[tuple[str, str | None, str]],
-    step: int,
     fallback_path: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Write all blocks to disk.
@@ -116,27 +116,26 @@ def write_blocks(
     """
     file_reports: list[str] = []
     path_errors: list[str] = []
-    ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
-        # 'edit:' is no longer a supported edit path — nudge back to file: rewrite
+        # 'edit:' is no longer a supported edit path - nudge back to file: rewrite
         if lang == "edit":
             path_errors.append("[E000] edit: is not supported. Rewrite the whole file with a ```file:<path>``` block.")
             continue
 
         if path is None:
             if lang in _EXECUTABLE_LANGS:
-                # Save executable blocks without path to temp for record
-                path = f"/tmp/mini-agent-{ts}-{step}.py"
-            else:
-                # Non-executable without path - error
-                path_errors.append(f"[E011] {lang} block without path")
+                # Executable block with no path: nothing to write to disk here
+                # (it is executed as-is later). Don't clutter /tmp.
                 continue
+            # Non-executable without path - error
+            path_errors.append(f"[E011] {lang} block without path")
+            continue
 
         real = _clean_path(path)
         if real is None:
             # Placeholder path (e.g. <path> copied from the prompt) -
-            # try to recover a real path from other blocks or the last step.
+            # try to recover a real path from a sibling block or the last step.
             real = _find_real_path(blocks, fallback_path)
             if real is None:
                 path_errors.append(f"[E013] {lang} block has invalid path: {path}")
@@ -145,14 +144,15 @@ def write_blocks(
         full_path = os.path.abspath(real)
 
         try:
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            directory = os.path.dirname(full_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            if lang == "file":
-                file_reports.append(f"Written {full_path}")
+            file_reports.append(f"Written {full_path}")
         except Exception as e:
-            # Surface write failures - swallowing them silently would leave
-            # the model running a stale file it thinks it just wrote.
+            # Surface write failures - swallowing them silently would let the
+            # model believe it wrote the file while it runs a stale one.
             path_errors.append(f"[E012] Failed to write {full_path}: {e}")
 
     return file_reports, path_errors
@@ -183,8 +183,10 @@ def _clean_path(path: str) -> str | None:
 
 def _find_real_path(blocks: list[tuple[str, str | None, str]], fallback: str | None = None) -> str | None:
     """Find a real file path from other blocks, for recovering placeholder paths."""
-    for _, p, _ in blocks:
-        if p:
+    for lang, p, _ in blocks:
+        # Skip sibling file: blocks so a stray placeholder can't overwrite a
+        # sibling file with its own content.
+        if p and lang != "file":
             cleaned = _clean_path(p)
             if cleaned:
                 return cleaned
@@ -308,6 +310,13 @@ def react_loop(
         # directly (no pre-flatten / post-wrap needed).
         response = model.generate(messages=messages, stop_sequences=stop_sequences)
 
+        tu = getattr(response, "token_usage", None)
+        if tu is not None:
+            _log(
+                verbose,
+                f"[tokens] in={tu.input_tokens} out={tu.output_tokens}",
+            )
+
         output = response.content or ""
 
         _log(verbose, f"Model output:\n{output}", limit=500)
@@ -351,7 +360,7 @@ def react_loop(
         no_code_counter = 0
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        file_reports, path_errors = write_blocks(blocks, step, written_path)
+        file_reports, path_errors = write_blocks(blocks, written_path)
         wrote_target = bool(file_reports)
 
         # 3a. Path error — a file:/edit: block had no path or a placeholder path.
@@ -392,7 +401,7 @@ def react_loop(
                     "to verify it works, then final_answer(...)."
                 )
                 messages.append({"role": "assistant", "content": output})
-                messages.append({"role": "user", "content": f"Observation:\n{observation}"})
+                messages.append({"role": "user", "content": f"[Result]\n{observation}"})
                 continue
             # No executable block — nudge the model to include one
             messages.append({"role": "assistant", "content": output})
@@ -439,6 +448,9 @@ def react_loop(
         if not step_had_error and result.logs:
             if any(marker in result.logs for marker in _ERROR_MARKERS):
                 step_had_error = True
+        # Did this step actually re-verify the file (run it)? A successful
+        # run after a prior error forgives that error.
+        verified_this_step = "run_python_file" in result.tool_calls
 
         # 5c. No-progress guard: steps that neither write nor finalize mean the
         # model is stuck (e.g. only reading). Stop early instead of burning steps.
@@ -474,8 +486,9 @@ def react_loop(
 
         # 7. Check for final_answer — STRICT VERIFICATION
         if result.is_final_answer:
-            # --- Rule B (E003): final_answer after an error in the previous step ---
-            if last_step_had_error or step_had_error:
+            # --- Rule B (E003): reject final_answer if this step errored, OR if a
+            # previous step errored and this step did NOT re-verify the file ---
+            if step_had_error or (last_step_had_error and not_verified_this_step):
                 error_summary = result.error or "previous step failed"
                 if not result.error and result.logs:
                     for marker in _ERROR_MARKERS:
@@ -503,7 +516,7 @@ def react_loop(
 
             # All checks passed — accept final_answer
             _log(verbose, f"\n{'='*20} Done (final_answer) {'='*20}")
-            return str(result.output) if result.output is not None else result.logs
+            return str(result.output) if result.output is not None else (result.logs or "")[-2000:]
 
         # Update last_step_had_error for next iteration
         last_step_had_error = step_had_error
@@ -533,7 +546,7 @@ def react_loop(
     if messages and messages[-1].get("role") == "user":
         last_obs = messages[-1]["content"]
         if "Execution logs:\n" in last_obs:
-            return last_obs.split("Execution logs:\n", 1)[1]
+            return last_obs.split("Execution logs:\n", 1)[1][-2000:]
 
     return "Max steps reached without final answer"
 

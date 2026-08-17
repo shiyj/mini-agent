@@ -18,6 +18,7 @@ Users create the model externally and pass it in.
 """
 
 import subprocess
+import sys
 
 from .config import load_agent_config
 from .context import ContextCompressor, SummaryCompressor
@@ -113,7 +114,9 @@ def run_python_file(filename: str) -> str:
     """
     try:
         result = subprocess.run(
-            ["python3", filename],
+            # sys.executable: run inside the SAME interpreter/venv as the agent,
+            # so the script can import packages installed there.
+            [sys.executable, filename],
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
@@ -254,13 +257,18 @@ def run_deep_agent_with_config(
         reasoning=reasoning,
     )
 
-    compressor_cfg = config.get("compressor", {})
-    compressor = SummaryCompressor(
-        max_messages=compressor_cfg.get("max_messages", 20),
-        compress_batch=compressor_cfg.get("compress_batch", 5),
-        keep_recent=compressor_cfg.get("keep_recent", 6),
-        max_summary_tokens=compressor_cfg.get("max_summary_tokens", 512),
-    )
+    # Compressor is opt-in: clear short tasks (the common case for small
+    # models) never need LLM summarization - it just adds cost and latency.
+    # Enable per-model in agents.json with "compressor": {"enabled": true, ...}.
+    compressor_cfg = config.get("compressor") or {}
+    compressor = None
+    if compressor_cfg.get("enabled", False):
+        compressor = SummaryCompressor(
+            max_messages=compressor_cfg.get("max_messages", 20),
+            compress_batch=compressor_cfg.get("compress_batch", 5),
+            keep_recent=compressor_cfg.get("keep_recent", 6),
+            max_summary_tokens=compressor_cfg.get("max_summary_tokens", 512),
+        )
 
     return run_deep_agent(
         prompt=prompt,

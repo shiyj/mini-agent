@@ -1,14 +1,14 @@
 """Custom Model that calls a ``/v1/responses`` endpoint via httpx.
 
-Uses local types only.
-Supports both SSE streaming and non-streaming (bulk) modes.
+Uses local types only. Single non-streaming POST per call - simpler to debug;
+retry once (with a temperature bump) if the model returns a blank response.
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
 
@@ -39,18 +39,6 @@ def _flatten_content(msg: dict[str, Any]) -> str:
     return ""
 
 
-def _parse_sse(line: str) -> tuple[str, str] | None:
-    """Parse a single SSE line into (event_type, data) or None."""
-    line = line.strip()
-    if not line:
-        return None
-    if line.startswith("event: "):
-        return ("event", line[7:])
-    if line.startswith("data: "):
-        return ("data", line[6:])
-    return None
-
-
 class ResponsesModel:
     """Model that calls a ``/v1/responses`` compatible endpoint via httpx.
 
@@ -62,8 +50,6 @@ class ResponsesModel:
         api_base: Server base URL (default ``http://localhost:11434``).
         temperature: Sampling temperature.
         max_output_tokens: Maximum tokens the model may generate (default 512).
-        stream: If False (default), use a single POST request — easier for debugging.
-            If True, use SSE streaming for lower first-token latency.
     """
 
     def __init__(
@@ -74,13 +60,11 @@ class ResponsesModel:
         temperature: float = 0.0,
         max_output_tokens: int = 512,
         context_window: int = 65536,
-        stream: bool = False,
         log_file: str | None = None,
         reasoning: dict[str, Any] | None = None,
         **kwargs,
     ):
         self.model_name = model_name
-        self.model_id = model_name
         # Normalize: accept baseURL with or without a trailing "/v1"
         base = api_base.rstrip("/")
         if base.lower().endswith("/v1"):
@@ -90,7 +74,6 @@ class ResponsesModel:
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
         self.context_window = context_window
-        self.stream = stream
         self.log_file = log_file
         self.reasoning = reasoning
         self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
@@ -142,7 +125,6 @@ class ResponsesModel:
             "input": input_items,
             "temperature": self.temperature,
             "max_output_tokens": self.max_output_tokens,
-            "stream": self.stream,
         }
         if instructions:
             body["instructions"] = instructions
@@ -166,10 +148,7 @@ class ResponsesModel:
                 # Bump temperature to break the model out of a blank response
                 base_t = attempt_body.get("temperature") or 0.0
                 attempt_body["temperature"] = min(1.0, base_t + 0.25 * attempt)
-            if self.stream:
-                output_text, usage_data = self._send_streaming(attempt_body)
-            else:
-                output_text, usage_data = self._send_bulk(attempt_body)
+            output_text, usage_data = self._send_bulk(attempt_body)
             if output_text and output_text.strip():
                 break
 
@@ -224,32 +203,6 @@ class ResponsesModel:
         except OSError:
             pass  # Silently ignore write failures — logging should never crash
 
-    def _send_streaming(
-        self, body: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]]:
-        """Send a streaming request and collect output via SSE events."""
-        output_text = ""
-        usage_data: dict[str, Any] = {}
-        all_events: list[dict[str, Any]] = []
-        self._log("request", body)
-        for event_type, data in self._iter_sse(body):
-            all_events.append({"event": event_type, "data": data})
-            if event_type == "response.output_text.delta":
-                delta = data.get("delta", "")
-                if isinstance(delta, str):
-                    output_text += delta
-            elif event_type == "response.completed":
-                resp_data = data.get("response") or data
-                usage_data = resp_data.get("usage", {})
-                if not output_text:
-                    output_text = self._extract_output_text(resp_data)
-        self._log("response", body, response_data={
-            "events": all_events,
-            "output_text": output_text,
-            "usage": usage_data,
-        })
-        return output_text, usage_data
-
     def _send_bulk(
         self, body: dict[str, Any]
     ) -> tuple[str, dict[str, Any]]:
@@ -258,8 +211,6 @@ class ResponsesModel:
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        # Ensure stream is False for the actual request
-        body["stream"] = False
         self._log("request", body)
         resp = self._client.post(url, json=body, headers=headers)
         try:
@@ -272,33 +223,6 @@ class ResponsesModel:
         output_text = self._extract_output_text(data)
         usage_data = data.get("usage", {})
         return output_text, usage_data
-
-    def _iter_sse(
-        self, body: dict[str, Any]
-    ) -> Iterator[tuple[str, Any]]:
-        """POST to ``/v1/responses`` with ``stream: true`` and yield
-        ``(event_type, parsed_data)`` tuples from the SSE stream."""
-        url = f"{self.api_base}/v1/responses"
-        headers = {}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        with self._client.stream("POST", url, json=body, headers=headers) as resp:
-            resp.raise_for_status()
-            current_event = ""
-            for raw_line in resp.iter_lines():
-                parsed = _parse_sse(raw_line)
-                if parsed is None:
-                    continue
-                kind, value = parsed
-                if kind == "event":
-                    current_event = value
-                elif kind == "data" and current_event:
-                    try:
-                        data = json.loads(value)
-                    except json.JSONDecodeError:
-                        data = value
-                    yield (current_event, data)
-                    current_event = ""
 
     @staticmethod
     def _extract_output_text(raw: dict[str, Any]) -> str:

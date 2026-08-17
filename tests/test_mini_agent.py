@@ -1,8 +1,8 @@
 """Tests for the simplified whole-file-rewrite agent.
 
 Covers block parsing / whole-file rewrite logic, error handling, and a full
-react_loop run with a stubbed model (no network). The heavy hashline `edit:`
-DSL is gone — editing is whole-file `file:` rewrite only.
+react_loop run with a stubbed model (no network). The heavy hashline ``edit:``
+DSL is gone - editing is whole-file ``file:`` rewrite only.
 """
 
 import os
@@ -50,7 +50,7 @@ def test_parse_step_converts_tool_name_fence_to_python():
 def test_write_blocks_rewrites_whole_file(tmp_path):
     target = tmp_path / "sub" / "out.py"
     blocks = parse_step(f"```file:{os.fspath(target)}\ncontent=1\n```")
-    file_reports, path_errors = write_blocks(blocks, step=1)
+    file_reports, path_errors = write_blocks(blocks)
     assert not path_errors
     assert f"Written {os.path.abspath(os.fspath(target))}" in file_reports
     assert target.read_text(encoding="utf-8") == "content=1"
@@ -58,14 +58,14 @@ def test_write_blocks_rewrites_whole_file(tmp_path):
 
 def test_write_blocks_rejects_edit_block(tmp_path):
     blocks = [("edit", "x.py", "replace 1#abcd print(1)")]
-    file_reports, path_errors = write_blocks(blocks, step=1)
+    file_reports, path_errors = write_blocks(blocks)
     assert file_reports == []
     assert path_errors and "not supported" in path_errors[0]
 
 
 def test_write_blocks_rejects_no_path_file():
     blocks = [("file", None, "content")]
-    file_reports, path_errors = write_blocks(blocks, step=1)
+    file_reports, path_errors = write_blocks(blocks)
     assert file_reports == []
     assert path_errors and "without path" in path_errors[0]
 
@@ -73,7 +73,7 @@ def test_write_blocks_rejects_no_path_file():
 def test_write_blocks_rejects_placeholder_path(tmp_path):
     """A <path> placeholder copied from the prompt must NOT write a file."""
     blocks = [("file", "<path>", "x=1")]
-    file_reports, path_errors = write_blocks(blocks, step=1, fallback_path=None)
+    file_reports, path_errors = write_blocks(blocks)
     assert file_reports == []
     assert path_errors and "invalid path" in path_errors[0]
     assert not (tmp_path / "<path>").exists()
@@ -82,9 +82,7 @@ def test_write_blocks_rejects_placeholder_path(tmp_path):
 def test_write_blocks_recovers_placeholder_via_fallback(tmp_path):
     target = tmp_path / "real.py"
     blocks = [("file", "<path>", "x=1")]
-    file_reports, path_errors = write_blocks(
-        blocks, step=1, fallback_path=str(target)
-    )
+    file_reports, path_errors = write_blocks(blocks, fallback_path=str(target))
     assert not path_errors
     assert target.read_text(encoding="utf-8") == "x=1"
 
@@ -92,19 +90,28 @@ def test_write_blocks_recovers_placeholder_via_fallback(tmp_path):
 def test_write_blocks_strips_backticks_around_path(tmp_path):
     target = tmp_path / "out.py"
     blocks = parse_step(f"```file:`{target}`\nx=1\n```")
-    file_reports, path_errors = write_blocks(blocks, step=1)
+    file_reports, path_errors = write_blocks(blocks)
     assert not path_errors
     assert target.read_text(encoding="utf-8") == "x=1"
 
 
 def test_write_blocks_reports_write_failure(tmp_path):
-    """Writing to an existing directory path should surface an error."""
+    """Writing to an existing directory path surfaces a write error."""
     directory = tmp_path / "adirectory"
     directory.mkdir()
     blocks = [("file", str(directory), "x=1")]
-    file_reports, path_errors = write_blocks(blocks, step=1)
+    file_reports, path_errors = write_blocks(blocks)
     assert file_reports == []
     assert any("Failed to write" in e for e in path_errors)
+
+
+def test_write_blocks_does_not_overwrite_sibling_file_block(tmp_path):
+    """A placeholder file: block must NOT steal a sibling file: path."""
+    a = tmp_path / "a.py"
+    blocks = [("file", str(a), "good"), ("file", "<path>", "junk")]
+    file_reports, path_errors = write_blocks(blocks)
+    assert a.read_text(encoding="utf-8") == "good"
+    assert any("invalid path" in e for e in path_errors)
 
 
 # ---------------------------------------------------------------------------
@@ -150,21 +157,21 @@ def test_get_local_model_returns_responses_model():
 
 
 def test_deep_agent_single_step_file_rewrite(tmp_path):
-    """Model rewrites a file with ```file: and final_answers — should succeed."""
+    """Model rewrites a file with ```file: and final_answers - should succeed."""
     target = tmp_path / "greet.py"
     target.write_text("print('broken')", encoding="utf-8")
-
+    t = os.fspath(target)
     outputs = [
-        f"```file:{os.fspath(target)}\n"
-        f"def greet(name):\n"
-        f"    print(f'hello, {{name}}')\n"
-        f"if __name__ == '__main__':\n"
-        f"    greet('world')\n"
-        f"```\n"
-        f"```python\n"
-        f"run_python_file('{os.fspath(target)}')\n"
-        f"final_answer('done')\n"
-        f"```\n",
+        f"```file:{t}\n"
+        "def greet(name):\n"
+        "    print(f'hello, {name}')\n"
+        "if __name__ == '__main__':\n"
+        "    greet('world')\n"
+        "```\n"
+        "```python\n"
+        f"run_python_file('{t}')\n"
+        "final_answer('done')\n"
+        "```\n",
     ]
     stub = _StubModel(outputs)
     result = run_deep_agent("Rewrite greet.py", model=stub, max_steps=4, verbose=False)
@@ -178,11 +185,11 @@ def test_deep_agent_read_then_write_then_final(tmp_path):
     """Two steps: read_file first, then rewrite, is also accepted."""
     target = tmp_path / "calc.py"
     target.write_text("print(1 + 1)", encoding="utf-8")
-
+    t = os.fspath(target)
     outputs = [
-        f"```python\nread_file('{os.fspath(target)}')\n```\n",
-        f"```file:{os.fspath(target)}\nprint(2 + 2)\n```\n"
-        f"```python\nfinal_answer('ok')\n```\n",
+        "```python\nread_file('" + t + "')\n```\n",
+        "```file:" + t + "\nprint(2 + 2)\n```\n"
+        "```python\nfinal_answer('ok')\n```\n",
     ]
     stub = _StubModel(outputs)
     result = run_deep_agent("fix calc.py", model=stub, max_steps=5, verbose=False)
@@ -195,13 +202,11 @@ def test_deep_agent_rejects_final_answer_without_work(tmp_path):
     only succeeds once the model actually writes a file."""
     target = tmp_path / "calc.py"
     target.write_text("print(1 + 1)", encoding="utf-8")
-
+    t = os.fspath(target)
     outputs = [
-        # Step 1: premature final_answer, no prior work -> rejected.
-        f"```python\nfinal_answer('done')\n```\n",
-        # Step 2: actually rewrite the file and final_answer -> accepted.
-        f"```file:{os.fspath(target)}\nprint(2 + 2)\n```\n"
-        f"```python\nfinal_answer('ok')\n```\n",
+        "```python\nfinal_answer('done')\n```\n",
+        "```file:" + t + "\nprint(2 + 2)\n```\n"
+        "```python\nfinal_answer('ok')\n```\n",
     ]
     stub = _StubModel(outputs)
     result = run_deep_agent("fix calc.py", model=stub, max_steps=5, verbose=False)
@@ -211,17 +216,17 @@ def test_deep_agent_rejects_final_answer_without_work(tmp_path):
 
 @pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
 def test_deep_agent_rejects_final_answer_after_failed_run(tmp_path):
-    """Rule B (E003): final_answer right after a script that ran but FAILED is
-    rejected; the model must fix and re-verify before final_answer is accepted."""
+    """Rule B: final_answer right after a FAILED run is rejected; the model
+    must fix + re-verify before final_answer is accepted."""
     target = tmp_path / "app.py"
-
+    t = os.fspath(target)
     outputs = [
-        # Step 1: write a broken script, run it (fails -> 【FAILED】), still final_answer.
-        f"```file:{os.fspath(target)}\nraise RuntimeError('boom')\n```\n"
-        f"```python\nrun_python_file('{os.fspath(target)}')\nfinal_answer('done')\n```\n",
-        # Step 2: fix it and final_answer -> accepted.
-        f"```file:{os.fspath(target)}\nprint('ok')\n```\n"
-        f"```python\nrun_python_file('{os.fspath(target)}')\nfinal_answer('fixed')\n```\n",
+        # Step 1: writes a broken script, runs it (fails), then final_answers.
+        "```file:" + t + "\nraise RuntimeError('boom')\n```\n"
+        "```python\nrun_python_file('" + t + "')\nfinal_answer('done')\n```\n",
+        # Step 2: fixes it, re-verifies, final_answers -> accepted.
+        "```file:" + t + "\nprint('ok')\n```\n"
+        "```python\nrun_python_file('" + t + "')\nfinal_answer('fixed')\n```\n",
     ]
     stub = _StubModel(outputs)
     result = run_deep_agent("fix app.py", model=stub, max_steps=5, verbose=False)
