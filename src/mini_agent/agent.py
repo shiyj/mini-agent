@@ -42,7 +42,7 @@ def get_local_model(
     model_name: str,
     api_base: str = "http://localhost:11434",
     api_key: str | None = None,
-    temperature: float = 0.0,
+    temperature: float = 0.1,
     max_output_tokens: int = 4096,
     context_window: int = 65536,
     log_file: str | None = None,

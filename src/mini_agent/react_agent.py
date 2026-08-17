@@ -86,12 +86,34 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
       to a temp file /tmp/mini-agent-{timestamp}-{step}.py for record.
     - Blocks are returned in document order.
 
-    Returns:
-        List of (lang, path_or_none, content).
+    Normalization: if the model writes ```python\nedit:path or ```python\nfile:path
+    (wrong fence type), it is automatically converted to ```edit:path / ```file:path.
     """
     # Strip special tokens
     text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|.*?\|>', '', text)
+
+    # Normalize: ```python\nedit:path or ```python\nfile:path → correct fence
+    text = re.sub(
+        r'```python\s*\n(edit|file):([^\n]+)',
+        r'```\1:\2',
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # Normalize: ```read_file(...) or ```run_python_file(...) → ```python block
+    # (model sometimes uses tool names as fence languages instead of ```python)
+    # Handle both single-line and multi-line forms
+    text = re.sub(
+        r'```(read_file|run_python_file)\s*\(([^)]*)\)\s*```',
+        r'```python\n\1(\2)\n```',
+        text,
+    )
+    text = re.sub(
+        r'```(read_file|run_python_file)\s*\(([^)]*)\)\s*\n',
+        r'```python\n\1(\2)\n',
+        text,
+    )
 
     blocks: list[tuple[str, str | None, str]] = []
 
@@ -118,6 +140,7 @@ def write_blocks(
     blocks: list[tuple[str, str | None, str]],
     step: int,
     verbose: bool = False,
+    fallback_path: str | None = None,
 ) -> tuple[bool, list[str], list[str], list[str]]:
     """Write all blocks to disk.
 
@@ -128,6 +151,10 @@ def write_blocks(
     - ``file`` / ``edit`` without path -> error (E011_NO_PATH), reported back
       to the caller so the model can be nudged.
     - All paths resolved relative to CWD; parent dirs created.
+
+    Args:
+        fallback_path: If a block uses ``<your_file_path>`` and no other block
+            has a real path, use this as fallback.
 
     Returns:
         (wrote_any, edit_reports, file_reports, path_errors) - ``wrote_any`` is
@@ -147,6 +174,14 @@ def write_blocks(
             if path is None:
                 path_errors.append(f"[E011_NO_PATH] edit block without path")
                 continue
+            # Auto-replace <your_file_path> placeholder with a real path from other blocks
+            if "<your_file_path>" in (path or ""):
+                real = _find_real_path(blocks, fallback_path)
+                if real:
+                    path = real
+                else:
+                    path_errors.append(f"[E013_INVALID_PATH] edit block has invalid path: {path}")
+                    continue
             if not _is_valid_path(path):
                 path_errors.append(f"[E013_INVALID_PATH] edit block has invalid path: {path}")
                 continue
@@ -164,6 +199,15 @@ def write_blocks(
             else:
                 # Non-executable without path - error
                 path_errors.append(f"[E011_NO_PATH] {lang} block without path")
+                continue
+
+        # Auto-replace <your_file_path> placeholder with a real path from other blocks
+        if "<your_file_path>" in (path or ""):
+            real = _find_real_path(blocks, fallback_path)
+            if real:
+                path = real
+            else:
+                path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {path}")
                 continue
 
         # Resolve path relative to CWD
@@ -185,6 +229,28 @@ def write_blocks(
             pass  # write failures are not fatal; let the model retry
 
     return wrote_any, edit_reports, file_reports, path_errors
+
+
+def _find_real_path(blocks: list[tuple[str, str | None, str]], fallback: str | None = None) -> str | None:
+    """Find a real file path from other blocks, for auto-replacing ``<your_file_path>``."""
+    for _, p, _ in blocks:
+        if p and "<your_file_path>" not in p and _is_valid_path(p):
+            return p
+    # Fallback: use the path from a previous step (known to be valid)
+    if fallback and _is_valid_path(fallback):
+        return fallback
+    return None
+
+
+def _safe_read_file(path: str) -> str | None:
+    """Read a file and return it with hash tags, or None on failure."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        from .hashline import tag_lines
+        return tag_lines(text)
+    except Exception:
+        return None
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -249,6 +315,9 @@ def react_loop(
     has_used_tool = False          # C-rule: at least one tool call before final_answer
     last_step_had_error = False    # B-rule: previous step had an error
     no_progress = 0                # no-write/verify progress counter
+    no_code_counter = 0            # consecutive steps without any code block
+    read_only_counter = 0          # consecutive steps that only read, never edit
+    stale_counter = 0              # consecutive E009 stale-anchor failures
     # ---------------------------------------------------
 
     stop_sequences = ["Observation:"]
@@ -345,15 +414,29 @@ def react_loop(
         blocks = parse_step(output)
         if not blocks:
             # Model didn't produce any valid blocks — tell it (E001) and retry
+            no_code_counter += 1
             messages.append({"role": "assistant", "content": output})
-            messages.append({
-                "role": "user",
-                "content": prompts.format_error(prompts.E001_NO_CODE),
-            })
+            if no_code_counter >= 3:
+                # Force template after 3 consecutive text-only responses
+                template = (
+                    f"You have produced {no_code_counter} text-only responses. "
+                    f"Copy this exact template:\n"
+                    f"```python\n"
+                    f"run_python_file('{written_path or 'the_file.py'}')\n"
+                    f"final_answer('done')\n"
+                    f"```"
+                )
+                messages.append({"role": "user", "content": template})
+            else:
+                messages.append({
+                    "role": "user",
+                    "content": prompts.format_error(prompts.E001_NO_CODE),
+                })
             continue
+        no_code_counter = 0
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports, file_reports, path_errors = write_blocks(blocks, step, verbose)
+        wrote_this_step, edit_reports, file_reports, path_errors = write_blocks(blocks, step, verbose, written_path)
         # Only file:/edit: blocks count as "writing the target file" -
         # executable blocks saved to temp files do NOT fix the file on disk.
         wrote_target = bool(file_reports or edit_reports)
@@ -379,15 +462,53 @@ def react_loop(
                 break
 
         # 3a. Stale anchor detection — if any edit block hit a hash mismatch,
-        # inject E009 recovery prompt and retry
+        # inject E009 recovery with the CORRECT hash extracted from the error
         stale = [r for r in edit_reports if r.startswith("[E_STALE_ANCHOR]")]
         if stale:
             messages.append({"role": "assistant", "content": output})
-            messages.append({
-                "role": "user",
-                "content": prompts.format_error(prompts.E009_STALE_ANCHOR, detail=written_path),
-            })
+            read_only_counter = 0  # reset: model attempted to edit, hash was stale
+            stale_counter += 1
+            # After 2 consecutive stale-anchor failures the file is likely
+            # corrupted by a bad edit (e.g. single-anchor replace with multi-line
+            # content that duplicated lines). Incremental editing can't recover —
+            # force a clean full-file rewrite instead.
+            if stale_counter >= 2:
+                fresh = _safe_read_file(written_path) if written_path else None
+                recovery = (
+                    f"Error E009 (repeated): editing line-by-line is not working — "
+                    f"the file may be corrupted. STOP editing. Rewrite the ENTIRE file "
+                    f"with a ```file:{written_path}``` block containing the full corrected "
+                    f"content (raw, no quotes), then ```python\\n"
+                    f"run_python_file('{written_path}')\\nfinal_answer('done')\\n```."
+                )
+                if fresh:
+                    recovery += f"\n\nCurrent file content:\n{fresh}"
+                messages.append({"role": "user", "content": recovery})
+                _log(verbose, f"[stale-escalate] Forcing full rewrite after {stale_counter} E009")
+                continue
+            # First stale failure: extract the correct hash and hand it back.
+            # The error format is: "Line N#WRONG has changed (now N#CORRECT)."
+            import re as _re
+            correct_hashes = []
+            for s in stale:
+                m = _re.search(r'now (\d+#[0-9a-f]{4})', s)
+                if m:
+                    correct_hashes.append(m.group(1))
+            if correct_hashes:
+                hash_str = ", ".join(correct_hashes)
+                recovery = (
+                    f"Error E009: Hash mismatch. The correct hash(es) are: {hash_str}.\n"
+                    f"Use these EXACT anchors in your ```edit:{written_path}``` block.\n"
+                    f"Do NOT reuse the old hash — it has changed."
+                )
+            else:
+                recovery = prompts.format_error(prompts.E009_STALE_ANCHOR, detail=written_path)
+            messages.append({"role": "user", "content": recovery})
             continue
+        else:
+            # Any non-stale edit outcome resets the escalation counter
+            if edit_reports:
+                stale_counter = 0
 
         # 4. Find the FIRST executable block (python) to run
         exec_code = None
@@ -447,6 +568,12 @@ def react_loop(
         # C-rule: track if any tool has been called
         if result.tool_calls:
             has_used_tool = True
+
+        # Track read-only loop: consecutive steps that only call read_file
+        if wrote_target or "run_python_file" in result.tool_calls:
+            read_only_counter = 0
+        elif "read_file" in result.tool_calls and not wrote_target:
+            read_only_counter += 1
         # B-rule: track if this step had an error
         step_had_error = bool(result.error)
         # Also check tool output for failure indicators
@@ -487,18 +614,21 @@ def react_loop(
 
         _log(verbose, f"\nObservation:\n{observation}", limit=500)
 
+        # 6b. Read-only loop guard: if model only reads for 3+ steps, push it to edit
+        if read_only_counter >= 3:
+            read_only_counter = 0
+            push = (
+                "You have only been reading the file for 3+ steps without making changes. "
+                "You MUST edit the file NOW. Use ```edit:{path}``` or ```file:{path}``` "
+                "to fix the bugs, then ```python\nrun_python_file('{path}')\nfinal_answer('done')\n```"
+            ).format(path=written_path or "the_file")
+            messages.append({"role": "assistant", "content": output})
+            messages.append({"role": "user", "content": push})
+            _log(verbose, "[read-only-guard] Pushing model to edit after 3 read-only steps")
+            continue
+
         # 7. Check for final_answer — STRICT VERIFICATION
         if result.is_final_answer:
-            # --- Rule A (E012): final_answer called together with other tools ---
-            if result.tool_calls:
-                messages.append({"role": "assistant", "content": output})
-                messages.append({
-                    "role": "user",
-                    "content": prompts.format_error(prompts.E012_FINAL_WITH_TOOLS),
-                })
-                _log(verbose, "[final_answer-guard] Rejected: final_answer with other tools")
-                continue
-
             # --- Rule B (E003): final_answer after an error in previous step ---
             if last_step_had_error or step_had_error:
                 # Extract error summary for the message

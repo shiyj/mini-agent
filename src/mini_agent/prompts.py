@@ -44,15 +44,16 @@ E008_NO_PROGRESS = "E008_NO_PROGRESS"
 E009_STALE_ANCHOR = "E009_STALE_ANCHOR"
 E010_SYNTAX = "E010_SYNTAX"
 E011_NO_PATH = "E011_NO_PATH"
-E012_FINAL_WITH_TOOLS = "E012_FINAL_WITH_TOOLS"
 E013_INVALID_PATH = "E013_INVALID_PATH"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
     "E001_NO_CODE": (
         "Error E001: No executable ```python``` block found. "
-        "You MUST include a code block that runs. "
-        "Call your tools, observe the results, then call final_answer() ALONE."
+        "You MUST include a ```python``` block in EVERY response. "
+        "If you only called read_file(), you must NOW edit the file. "
+        "Use ```edit:{detail}``` to change specific lines, then "
+        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```"
     ),
     # E002: final_answer() called without any prior tool use
     "E002_FINAL_NO_ACTION": (
@@ -89,10 +90,9 @@ ERROR_PROMPTS = {
     # E007: model emitted identical output 3+ times (stuck in a loop)
     "E007_LOOP": (
         "Warning E007: your last 3 responses were identical — you are stuck in a loop. "
-        "Stop exploring or printing. Make a concrete change: use an "
-        "```edit:{detail}``` block to fix the specific broken line(s), or a "
-        "```file:{detail}``` block with the corrected content, then "
-        "run_python_file() to verify, then call final_answer()."
+        "Your edit keeps failing with the same error. SWITCH STRATEGY: use a "
+        "```file:{detail}``` block to rewrite the ENTIRE file instead of trying "
+        "to edit specific lines. This bypasses the hash problem entirely."
     ),
     # E008: no write/verify/finalize progress for 6 consecutive steps
     "E008_NO_PROGRESS": (
@@ -103,37 +103,16 @@ ERROR_PROMPTS = {
     ),
     # E009: hash-anchored edit failed because the file changed since read
     "E009_STALE_ANCHOR": (
-        "Error E009: Hash-anchored edit failed — the hash you wrote does not match "
-        "the actual hash of that line. There are TWO possible causes:\n"
-        "1) The file was modified since your last read_file() — call "
-        "read_file('{detail}') to get fresh N#HHHH anchors.\n"
-        "2) You copied the hash WRONG — the N#HHHH must be EXACTLY what "
-        "read_file() shows, character by character. Do NOT make up or guess "
-        "the hash; it is a security check, not a label.\n"
-        "Fix: either re-read the file (case 1) or copy the correct hash from "
-        "the read_file() output (case 2). Then retry with a SINGLE "
-        "```edit:{detail}``` block for one line, or rewrite the whole file "
-        "with a ```file:{detail}``` block."
+        "Error E009: Hash mismatch. The file has changed since you read it. "
+        "ACTION: Call read_file('{detail}') NOW to get fresh N#HHHH anchors. "
+        "Then retry with the new hashes."
     ),
     # E010: the model's OWN generated code failed to compile (SyntaxError),
-    # almost always a quote/escape conflict from embedding a whole file
-    # inside a Python string literal. Point it at the ```edit: / ```file: block.
     "E010_SYNTAX": (
-        "Error E010 - what to DO and what NOT to do:\n"
-        "DO:\n"
-        "1) Write the file with a ```file:{detail}``` block ONLY. That block holds "
-        "the ENTIRE corrected file, RAW - no surrounding quotes, no escaping, no triple-quotes.\n"
-        "2) Your ```python``` block must contain ONLY these two lines and NOTHING else:\n"
-        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```\n"
-        "3) For a single-line fix, use an ```edit:{detail}``` block instead of a full rewrite.\n"
-        "DO NOT:\n"
-        "- Do NOT put file content inside a ```python``` block (as a string, with open(), "
-        "or wrapped in quotes).\n"
-        "- Do NOT wrap code/text in quotes inside a ```python``` block.\n"
-        "Minimal correct pattern - write the file, then verify:\n"
-        "```file:{detail}\ndef load_data(source):\n    records = []\n```\n"
-        "then ONLY:\n"
-        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```"
+        "Error E010: SyntaxError in your code. "
+        "CAUSE: You likely wrote ```edit: or ```file: inside a ```python block. "
+        "FIX: Use a separate ```edit:path``` or ```file:path``` block "
+        "(NOT inside ```python). Then in a separate ```python block, just run + verify."
     ),
     # E011: file: or edit: block has no path - the block is useless without one
     "E011_NO_PATH": (
@@ -143,18 +122,12 @@ ERROR_PROMPTS = {
         "A bare ```file``` or ```edit``` with no path does nothing. "
         "Rewrite your block with the correct path, then run_python_file() to verify."
     ),
-    # E012: final_answer() called together with other tools in the same step
-    "E012_FINAL_WITH_TOOLS": (
-        "Error E012: You called final_answer() together with other tools. "
-        "First run your tools and observe the results, then call final_answer() ALONE in the next step."
-    ),
-    # E013: file: or edit: block has a path that looks like a placeholder or is invalid
+    # E013: file: or edit: block has an invalid/placeholder path
     "E013_INVALID_PATH": (
-        "Error E013: A ```file:``` or ```edit:``` block has an invalid path. "
-        "The path contained placeholder text (e.g. <your_file_path>), "
-        "markdown artifacts, or is otherwise not a valid file path. "
-        "You MUST specify a real file path like ```file:<your_file_path>``` "
-        "or ```edit:<your_file_path>```. Fix the path and try again."
+        "Error E013: Invalid path in ```file:``` or ```edit:``` block. "
+        "You directly copied the placeholder `<your_file_path>` instead of "
+        "replacing it with the actual file path. Fix: replace `<your_file_path>` "
+        "with the real path like ```file:data/modify_python.py```."
     ),
 }
 
@@ -186,10 +159,15 @@ def build_deep_system_prompt(
         3. Based on the observation, take the next action OR call final_answer(x) if the task is complete.
 
         ## Rules (MUST follow)
+        - ALL tool calls go in a ```python``` block. Do NOT use tool names as fence types:
+          CORRECT: ```python
+          read_file('path')        # correct
+          run_python_file('path')  # correct
+          ```
+          WRONG: ```read_file('path')    # WRONG! Use ```python```.
         - Code goes in fenced blocks: ```python to RUN code (which may call tools), ```file:<your_file_path> to write a whole file, ```edit:<your_file_path> to change specific lines.
         - Files are written ONLY via ```file:<your_file_path>``` / ```edit:<your_file_path>``` blocks. You MUST NOT write files from inside a ```python``` block (no open(), no string assignment of file content).
-        - final_answer(x) MUST be called ALONE, in its own ```python``` block, with NO other tool calls.
-          First run your tools and observe their output, then call final_answer() in a separate step.
+        - final_answer(x) can be called together with other tools in the same ```python``` block.
         - All ```file:```/```edit:``` blocks are written to disk FIRST; then ONLY the FIRST ```python``` block runs.
         - After each action, read the tool's output carefully before deciding the next step.
         - If a tool reports an error, fix the error before calling final_answer().
@@ -199,9 +177,11 @@ def build_deep_system_prompt(
 
         ## Fix lines (edit:)
         - read_file('<your_file_path>') shows `12#a3f4 print(x)`. The `12#a3f4` is a
-          **security hash** computed from the line content + its neighbors. You MUST
-          copy the `N#HHHH` anchor EXACTLY from read_file() output — character by
+          **security hash** computed from sha1(prev_line + curr_line + next_line).
+          You MUST copy the `N#HHHH` anchor EXACTLY from read_file() output — character by
           character. Do NOT make up or guess the hash; a wrong hash will be rejected.
+        - **IMPORTANT:** After any edit, the changed line AND its neighbors get new
+          hashes. If you get a hash mismatch, call read_file() again for fresh anchors.
         - Single line:
           ```edit:<your_file_path>
           replace 12#a3f4 print(y)
@@ -214,11 +194,13 @@ def build_deep_system_prompt(
           def greet(name):
               return f"Hello, {{name}}"
           ```
+        - **WARNING:** A single-anchor `replace 12#a3f4` followed by MANY lines
+          EXPANDS one line into many (it does NOT replace a range) — this duplicates
+          the lines below and corrupts the file. To replace lines 12-15, you MUST
+          use TWO anchors: `replace 12#a3f4 15#9abc`.
+        - For 3+ separate bugs, prefer a full ```file:``` rewrite over many edits.
         - Operations: `replace` (one line, or a `start..end` span), `insert_before`,
           `insert_after` / `append`, `prepend`, `delete`. One operation per line.
-        - Prefer a targeted `edit:` (single line or `start..end` span) over a full
-          ```file:``` rewrite whenever the change is local - it keeps anchors valid
-          and avoids SyntaxError from rewriting the whole file.
 
         ## Fix the WHOLE file (file:)
         - ```file:<your_file_path>
@@ -238,8 +220,10 @@ def build_deep_system_prompt(
         {tool_list}
 
         ## Common mistakes (do NOT)
-        - Do NOT write files from a ```python``` block (open()/string assignment) -> SyntaxError or no effect. Use a ```file:```/```edit:``` block.
-        - Do NOT put the whole file inside a Python string (e.g. content='...multi-line...') -> SyntaxError. Use a ```file:``` block with raw content.
+        - Do NOT use tool names as fence types (```read_file / ```run_python_file) → SyntaxError. Use ```python block.
+        - Do NOT put ```edit:``` or ```file:``` inside a ```python``` block → SyntaxError.
+        - Do NOT write files from a ```python``` block (open()/string assignment) → SyntaxError or no effect. Use a ```file:```/```edit:``` block.
+        - Do NOT put the whole file inside a Python string (e.g. content='...multi-line...') → SyntaxError. Use a ```file:``` block with raw content.
         - Do NOT call final_answer() before run_python_file() succeeds.
         - Do NOT emit more than one ```python``` block expecting all to run - only the FIRST runs.
         - Do NOT put explanation text inside a code block.
