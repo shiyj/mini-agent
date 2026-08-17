@@ -1,7 +1,10 @@
 """System prompts — all prompt text lives here, not scattered across files.
 
 Designed for small models (9B): short, direct, explicit stop conditions,
-no planning phase, clear final_answer trigger.
+no planning phase, clear final_answer trigger. Editing is done ONLY by
+rewriting the whole file with a ```file:path block (no hash anchors, no
+surgical line edits — small models reliably rewrite whole files but botch
+line-anchored edits).
 """
 
 import textwrap
@@ -17,7 +20,7 @@ FAST_AGENT_SYSTEM = (
     "No explanation, no thinking blocks."
 )
 
-# Fast-agent prefill config (moved from config/prompts.json)
+# Fast-agent prefill config
 FAST_AGENT_PREFILL = True
 FAST_AGENT_PREFILL_TEXT = "```python\n"
 
@@ -25,35 +28,22 @@ FAST_AGENT_PREFILL_TEXT = "```python\n"
 # ---------------------------------------------------------------------------
 # Error-code -> recovery prompt registry.
 #
-# Design rule: the SYSTEM PROMPT must stay short and generic.
-# When the agent detects a specific failure mid-run, it injects a
-# TARGETED recovery prompt as a user message — NOT by bloating the system
-# prompt. Each failure mode gets exactly ONE stable error code mapping to ONE
-# prompt. `react_agent.py` references these codes so all wording lives here.
-# Use `format_error(code, detail=...)` to fill placeholders.
+# Design rule: the SYSTEM PROMPT must stay short and generic. When the agent
+# detects a specific failure mid-run, it injects a TARGETED recovery prompt as
+# a user message — NOT by bloating the system prompt. Use
+# `format_error(code, detail=...)` to fill placeholders.
 # ---------------------------------------------------------------------------
-# Error-code string constants — use these instead of raw strings
 E001_NO_CODE = "E001_NO_CODE"
 E002_FINAL_NO_ACTION = "E002_FINAL_NO_ACTION"
 E003_FINAL_AFTER_ERROR = "E003_FINAL_AFTER_ERROR"
-E004_WRITE_READONLY = "E004_WRITE_READONLY"
-E005_WRITE_VAR = "E005_WRITE_VAR"
-E006_WRITE_GENERIC = "E006_WRITE_GENERIC"
-E007_LOOP = "E007_LOOP"
-E008_NO_PROGRESS = "E008_NO_PROGRESS"
-E009_STALE_ANCHOR = "E009_STALE_ANCHOR"
-E010_SYNTAX = "E010_SYNTAX"
-E011_NO_PATH = "E011_NO_PATH"
-E013_INVALID_PATH = "E013_INVALID_PATH"
+E004_NO_WRITE = "E004_NO_WRITE"
 
 ERROR_PROMPTS = {
     # E001: model produced no parseable ```python block
     "E001_NO_CODE": (
         "Error E001: No executable ```python``` block found. "
-        "You MUST include a ```python``` block in EVERY response. "
-        "If you only called read_file(), you must NOW edit the file. "
-        "Use ```edit:{detail}``` to change specific lines, then "
-        "```python\nrun_python_file('{detail}')\nfinal_answer('done')\n```"
+        "To read/run/verify, use ```python\n"
+        "read_file('path')\nrun_python_file('path')\nfinal_answer('done')\n```."
     ),
     # E002: final_answer() called without any prior tool use
     "E002_FINAL_NO_ACTION": (
@@ -65,69 +55,12 @@ ERROR_PROMPTS = {
         "Error E003: Your last action failed: {detail}. "
         "Fix the error before calling final_answer()."
     ),
-    # E004_WRITE_READONLY: code only read/printed the file, never wrote it
-    "E004_WRITE_READONLY": (
-        "Warning E004: You only read/printed the file — it is NOT fixed on disk. "
-        "Overwrite it now with a ```file:{detail}``` block (raw content, no "
-        "escaping) or an ```edit:{detail}``` block, then run_python_file() to "
-        "verify, then final_answer()."
-    ),
-    # E005: corrected code was assigned to a variable but never written
-    "E005_WRITE_VAR": (
-        "Warning E005: You stored the corrected code in a variable but "
-        "never saved it. Write it to disk NOW: use a ```file:{detail}``` block "
-        "with the raw corrected content, or an ```edit:{detail}``` block to "
-        "change just that line. Then run_python_file() and final_answer()."
-    ),
-    # E006: code ran but did not save anything (generic)
-    "E006_WRITE_GENERIC": (
-        "Warning E006: Your code ran but did NOT save changes to the file. Running "
-        "or printing code without saving does NOT fix the file on disk. Write it "
-        "with a ```file:{detail}``` block (raw content) or an "
-        "```edit:{detail}``` block, then run_python_file() to test it, then "
-        "call final_answer()."
-    ),
-    # E007: model emitted identical output 3+ times (stuck in a loop)
-    "E007_LOOP": (
-        "Warning E007: your last 3 responses were identical — you are stuck in a loop. "
-        "Your edit keeps failing with the same error. SWITCH STRATEGY: use a "
-        "```file:{detail}``` block to rewrite the ENTIRE file instead of trying "
-        "to edit specific lines. This bypasses the hash problem entirely."
-    ),
-    # E008: no write/verify/finalize progress for 6 consecutive steps
-    "E008_NO_PROGRESS": (
-        "Warning E008: Stuck — no progress toward fixing the file (no file write/run "
-        "in 6 consecutive steps). Save the corrected content to disk using an "
-        "```edit:{detail}``` block for targeted changes, or a "
-        "```file:{detail}``` block for a full rewrite."
-    ),
-    # E009: hash-anchored edit failed because the file changed since read
-    "E009_STALE_ANCHOR": (
-        "Error E009: Hash mismatch. The file has changed since you read it. "
-        "ACTION: Call read_file('{detail}') NOW to get fresh N#HHHH anchors. "
-        "Then retry with the new hashes."
-    ),
-    # E010: the model's OWN generated code failed to compile (SyntaxError),
-    "E010_SYNTAX": (
-        "Error E010: SyntaxError in your code. "
-        "CAUSE: You likely wrote ```edit: or ```file: inside a ```python block. "
-        "FIX: Use a separate ```edit:path``` or ```file:path``` block "
-        "(NOT inside ```python). Then in a separate ```python block, just run + verify."
-    ),
-    # E011: file: or edit: block has no path - the block is useless without one
-    "E011_NO_PATH": (
-        "Error E011: A ```file:``` or ```edit:``` block was found WITHOUT a file path. "
-        "You MUST specify the path in the fence header, like "
-        "```file:<your_file_path>``` or ```edit:<your_file_path>```. "
-        "A bare ```file``` or ```edit``` with no path does nothing. "
-        "Rewrite your block with the correct path, then run_python_file() to verify."
-    ),
-    # E013: file: or edit: block has an invalid/placeholder path
-    "E013_INVALID_PATH": (
-        "Error E013: Invalid path in ```file:``` or ```edit:``` block. "
-        "You directly copied the placeholder `<your_file_path>` instead of "
-        "replacing it with the actual file path. Fix: replace `<your_file_path>` "
-        "with the real path like ```file:data/modify_python.py```."
+    # E004: code ran but never wrote a file to disk
+    "E004_NO_WRITE": (
+        "Warning E004: Your code ran but did NOT save any file. Running or "
+        "printing code does not fix anything on disk. Write the corrected file "
+        "with a ```file:<path>``` block (raw content, no quotes), then "
+        "run_python_file('<path>') to verify, then final_answer()."
     ),
 }
 
@@ -151,80 +84,37 @@ def build_deep_system_prompt(
     tool_list = "\n".join(t.to_prompt() for t in tools)
 
     return textwrap.dedent(f"""\
-        You are a helpful AI assistant with tools. Solve the task by taking actions and observing their results.
+        You are a coding agent with tools. Solve the task by reading files, rewriting them, and running them.
 
         ## Workflow
-        1. Use a tool to take an action (e.g., read_file to read a file, run_python_file to run code).
+        1. Use a tool to inspect (read_file) and to run code (run_python_file).
         2. Observe the tool's output carefully.
-        3. Based on the observation, take the next action OR call final_answer(x) if the task is complete.
+        3. Take the next action, or call final_answer(x) when the task is complete.
 
         ## Rules (MUST follow)
-        - ALL tool calls go in a ```python``` block. Do NOT use tool names as fence types:
-          CORRECT: ```python
-          read_file('path')        # correct
-          run_python_file('path')  # correct
+        - ALL tool calls go in a ```python``` block (do NOT use tool names as fence types):
+          ```python
+          read_file('data/modify_python.py')
+          run_python_file('data/modify_python.py')
+          final_answer('fixed')
           ```
-          WRONG: ```read_file('path')    # WRONG! Use ```python```.
-        - Code goes in fenced blocks: ```python to RUN code (which may call tools), ```file:<your_file_path> to write a whole file, ```edit:<your_file_path> to change specific lines.
-        - Files are written ONLY via ```file:<your_file_path>``` / ```edit:<your_file_path>``` blocks. You MUST NOT write files from inside a ```python``` block (no open(), no string assignment of file content).
-        - final_answer(x) can be called together with other tools in the same ```python``` block.
-        - All ```file:```/```edit:``` blocks are written to disk FIRST; then ONLY the FIRST ```python``` block runs.
-        - After each action, read the tool's output carefully before deciding the next step.
-        - If a tool reports an error, fix the error before calling final_answer().
-        - Do NOT call final_answer() as your first action — you must do some work first.
-        - Only the FIRST ```python``` block in a step is executed.
-        - Tool output is printed automatically; do NOT add print() just to inspect.
-
-        ## Fix lines (edit:)
-        - read_file('<your_file_path>') shows `12#a3f4 print(x)`. The `12#a3f4` is a
-          **security hash** computed from sha1(prev_line + curr_line + next_line).
-          You MUST copy the `N#HHHH` anchor EXACTLY from read_file() output — character by
-          character. Do NOT make up or guess the hash; a wrong hash will be rejected.
-        - **IMPORTANT:** After any edit, the changed line AND its neighbors get new
-          hashes. If you get a hash mismatch, call read_file() again for fresh anchors.
-        - Single line:
-          ```edit:<your_file_path>
-          replace 12#a3f4 print(y)
-          ```
-        - **Multiple consecutive lines:** give `replace` a SECOND `end` anchor
-          (the last line to change) and put the new lines right below it - this
-          replaces the whole block in ONE edit (no `file:` rewrite needed):
-          ```edit:<your_file_path>
-          replace 12#a3f4 15#9abc
-          def greet(name):
-              return f"Hello, {{name}}"
-          ```
-        - **WARNING:** A single-anchor `replace 12#a3f4` followed by MANY lines
-          EXPANDS one line into many (it does NOT replace a range) — this duplicates
-          the lines below and corrupts the file. To replace lines 12-15, you MUST
-          use TWO anchors: `replace 12#a3f4 15#9abc`.
-        - For 3+ separate bugs, prefer a full ```file:``` rewrite over many edits.
-        - Operations: `replace` (one line, or a `start..end` span), `insert_before`,
-          `insert_after` / `append`, `prepend`, `delete`. One operation per line.
-
-        ## Fix the WHOLE file (file:)
-        - ```file:<your_file_path>
+        - Write a WHOLE file with a ```file:<path>``` block (raw content, no quotes):
+          ```file:data/modify_python.py
           def main():
-              records = [1, 2, 3]
-              print(sum(records))
-          if __name__ == "__main__":
+              print('hello')
+          if __name__ == '__main__':
               main()
           ```
-        - Then verify in a ```python``` block:
-          ```python
-          run_python_file('<your_file_path>')
-          final_answer("Fixed")
-          ```
+        - Editing is done by REWRITING the whole file with ```file:path```. There is no
+          line-editing syntax — always output the full corrected content.
+        - Do NOT write files from inside a ```python``` block (no open(), no string assignment).
+        - All ```file:``` blocks are written to disk FIRST; only the FIRST ```python``` block runs.
+        - After each action, read the tool's output carefully before deciding the next step.
+        - If a tool reports an error, fix it before calling final_answer().
+        - Do NOT call final_answer() as your first action — do some work first.
+        - final_answer(x) may be called together with other tool calls in the same ```python``` block.
+        - Tool output is printed automatically; do NOT add print() just to inspect.
 
         ## Tools
         {tool_list}
-
-        ## Common mistakes (do NOT)
-        - Do NOT use tool names as fence types (```read_file / ```run_python_file) → SyntaxError. Use ```python block.
-        - Do NOT put ```edit:``` or ```file:``` inside a ```python``` block → SyntaxError.
-        - Do NOT write files from a ```python``` block (open()/string assignment) → SyntaxError or no effect. Use a ```file:```/```edit:``` block.
-        - Do NOT put the whole file inside a Python string (e.g. content='...multi-line...') → SyntaxError. Use a ```file:``` block with raw content.
-        - Do NOT call final_answer() before run_python_file() succeeds.
-        - Do NOT emit more than one ```python``` block expecting all to run - only the FIRST runs.
-        - Do NOT put explanation text inside a code block.
     """)

@@ -31,52 +31,41 @@ def run_python_file(filename: str) -> str:
 
 ---
 
-## 四个内置工具
+## 内置工具
 
 | 工具 | 签名 | 机制 | 超时 |
 |------|------|------|------|
-| `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 进程内 `open().read()`，默认每行带 `N#HHHH` 哈希标签 | 无 |
+| `read_file` | `read_file(filename, offset=0, limit=0) -> str` | 进程内 `open().read()`，返回**纯文本** | 无 |
 | `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename])` | 30s |
 
-### read_file 的哈希标签
+### read_file
 
-默认返回格式（每行前缀 `行号#4位哈希 `）：
-
-```
-1#a3f4 def add(a, b):
-2#8d2c     return a + b
-```
-
-- 哈希 = `sha1(prev + curr + next)` 前 4 位 → 相同内容不同上下文得到不同哈希
-- `raw=True` 返回纯文本
-- `offset`/`limit` 可读取文件范围（1-indexed）
+- 返回文件原始内容（**无哈希标签**）
+- `offset`/`limit` 可读取文件范围（1-indexed，`0` = 全部）
+- 读取失败返回 `Error reading ...` 字符串
 
 ### 设计原则
-- `read_file`：本地 I/O，无需隔离
+- 极简：`read_file` / `run_python_file` 两个工具足够完成"读→改→验→终"的闭环。
 
 ---
 
-## 精准编辑：````edit:path``` 块
+## 编辑 = 整文件重写：````file:path``` 块
 
-编辑不通过 Python 工具，而是通过 Markdown 块在 `write_blocks` 阶段直接落盘：
+**编辑不通过 Python 工具**，而是通过 Markdown 块在 `write_blocks` 阶段落盘：
+
+- 写整个文件用 ````file:<path>``` 块（原始内容、零转义）：
 
 ```
-```edit:path/to/file.py
-replace 12#a3f4 print(y)
-insert_before 15#9abc new_line()
-insert_after 20#def0 another()
-delete 25#1234
+```file:path/to/file.py
+def add(a, b):
+    return a + b
 ```
 ```
 
-| 操作 | 说明 |
-|------|------|
-| `replace` | 用新内容替换锚定行 |
-| `insert_before` | 在锚定行前插入新行 |
-| `insert_after` | 在锚定行后插入新行 |
-| `delete` | 删除锚定行 |
+- 模型必须输出**完整**修正内容，没有行级/锚点编辑语法。
+- ````file:``` 块先于首个 ````python``` 块写到磁盘。
 
-锚点 `N#HHHH` 从 `read_file()` 的输出中直接复制。所有编辑在同一快照上校验（自底向上应用），过期锚点返回 `[E_STALE_ANCHOR]` 并附新鲜锚点。
+> 为什么不用哈希锚点行编辑？9B 小模型能可靠地整文件重写，但很难逐字抄对 `12#a3f4` 这类锚点；哈希编辑光是纠错/重试就要消耗好几步。整文件重写把这个复杂度直接消除。
 
 ---
 
@@ -96,7 +85,7 @@ for t in tools:
 ```
 
 **行为：**
-1. 记录 `tool_calls` 列表（用于进度判定、观察截断豁免）
+1. 记录 `tool_calls` 列表（用于观察截断豁免）
 2. 调用底层函数
 3. 返回值非 None 自动 `print()` → 出现在 Observation 中
 

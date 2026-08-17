@@ -23,7 +23,6 @@ from .config import load_agent_config
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT, build_deep_system_prompt
-from .hashline import tag_lines
 from .react_agent import react_loop
 from .tools import Tool, tool
 from .types import (
@@ -81,21 +80,18 @@ def get_local_model(
 # ---------------------------------------------------------------------------
 
 @tool
-def read_file(filename: str, raw: bool = False, offset: int = 0, limit: int = 0) -> str:
-    """Read a file and return its content with hash-anchored line tags.
+def read_file(filename: str, offset: int = 0, limit: int = 0) -> str:
+    """Read a file and return its plain content (no line tags).
 
-    Each line is prefixed with ``LINE#HASH `` so you can reference specific
-    lines in an `````edit:path``` block. Set ``raw=True`` to get plain content
-    without tags. Use ``offset`` (1-indexed) and ``limit`` to read a range.
+    Use ``offset`` (1-indexed) and ``limit`` to read a range.
 
     Args:
         filename: Path to the file to read.
-        raw: If True, return plain content without line tags.
         offset: Starting line number (1-indexed, 0 = start of file).
         limit: Max lines to return (0 = all lines).
 
     Returns:
-        The file content (tagged by default), or an error message.
+        The file content, or an error message.
     """
     try:
         with open(filename, "r", encoding="utf-8") as f:
@@ -103,21 +99,12 @@ def read_file(filename: str, raw: bool = False, offset: int = 0, limit: int = 0)
     except Exception as e:
         return f"Error reading {filename}: {e}"
 
-    if raw:
-        if offset > 0 or limit > 0:
-            lines = text.split("\n")
-            lo = max(0, offset - 1) if offset > 0 else 0
-            hi = lo + limit if limit > 0 else len(lines)
-            return "\n".join(lines[lo:hi])
-        return text
-
-    tagged = tag_lines(text)
     if offset > 0 or limit > 0:
-        lines = tagged.split("\n")
+        lines = text.split("\n")
         lo = max(0, offset - 1) if offset > 0 else 0
         hi = lo + limit if limit > 0 else len(lines)
         return "\n".join(lines[lo:hi])
-    return tagged
+    return text
 
 
 @tool
@@ -205,18 +192,21 @@ def run_deep_agent(
     max_steps: int = 8,
     max_observation_length: int = 2000,
     compressor: ContextCompressor | None = None,
+    verbose: bool = True,
 ) -> str:
-    """Deep ReAct: write -> run -> observe -> fix -> repeat.
+    """Deep ReAct: read -> rewrite whole file (```file:) -> run -> final.
 
     System prompt is built by ``build_deep_system_prompt()`` from
     ``prompts.py`` - the single source of truth for all prompt text.
 
     Args:
         prompt: Task description.
-        model: A ``ResponsesModel`` instance.
+        model: A ``ResponsesModel`` instance. Any object with the same
+            ``generate()`` interface works (e.g. a stub in tests).
         max_steps: Maximum ReAct iterations (8-15 recommended).
         max_observation_length: Max characters for observation content (0 = no truncation).
         compressor: Optional context compressor (e.g. SummaryCompressor).
+        verbose: Print step-by-step progress to stderr.
 
     Returns:
         The final agent output after all iterations.
@@ -233,7 +223,7 @@ def run_deep_agent(
         tools=tools,
         max_steps=max_steps,
         max_observation_length=max_observation_length,
-        verbose=True,
+        verbose=verbose,
         compressor=compressor,
     )
 

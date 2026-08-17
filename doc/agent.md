@@ -77,38 +77,33 @@ print(result)  # 原始模型输出
 
 ## 深思流
 
-### `run_deep_agent(prompt, model, max_steps=8, **kwargs) -> str`
+### `run_deep_agent(prompt, model, max_steps=8, verbose=True, **kwargs) -> str`
 
-**完整 ReAct 循环**的便利入口。文件路径由模型在代码块（`file:path` / `edit:path`）中自行写出，任务描述里写明要操作的文件即可。
+**完整 ReAct 循环**的便利入口。文件路径由模型在 `````file:path``` 代码块中自行写出，任务描述里写明要操作的文件即可。
 
 ```python
 result = run_deep_agent(
     prompt="examples/data/modify_python.py cannot run, find the problem and fix it.",
     model=model,
     max_steps=10,
+    verbose=True,
 )
 print(result)
 ```
 
 **内部：**
 ```python
-def run_deep_agent(prompt, model, max_steps=8, **kwargs):
-    model.max_output_tokens = max(model.max_output_tokens, 4096)
+def run_deep_agent(prompt, model, max_steps=8, max_observation_length=2000,
+                   compressor=None, verbose=True):
     tools = [run_python_file, read_file]
-
-    task = prompt + "\n\nIMPORTANT: Follow these steps exactly:\n" \
-        "1. Write the corrected file using a ```file:...``` block\n" \
-        "2. Run it with run_python_file() in a ```python``` block\n" \
-        "3. If errors, fix and write again, then run again\n" \
-        "4. When it works, call final_answer(result)"
-
+    system_prompt = build_deep_system_prompt(tools)
     return react_loop(
-        system_prompt=build_deep_system_prompt(tools),
-        task=task,
+        system_prompt=system_prompt,
+        task=prompt,          # 直接使用 prompt，不再追加固定步骤说明
         model=model,
         tools=tools,
         max_steps=max_steps,
-        **kwargs,
+        verbose=verbose,
     )
 ```
 
@@ -121,36 +116,37 @@ result = run_deep_agent_with_config(
     prompt="examples/data/out.py cannot run, find the problem and fix it.",
     model_name="ornith:9b",
     provider_name="ollama-local",  # 可选，从 agents.json 推断
-    max_steps=10,
-    temperature=0.5,
+    log_file="logs/run.jsonl",     # 可选，JSONL 请求/响应日志
 )
 ```
 
 **内部：**
 ```python
-def run_deep_agent_with_config(
-    prompt,
-    model_name,
-    provider_name=None,
-    max_steps=8,
-    **model_overrides,
-):
-    model = load_agent_config(model_name, provider_name, **model_overrides)
-    return run_deep_agent(prompt, model, max_steps)
+def run_deep_agent_with_config(prompt, model_name, provider_name=None,
+                               log_file=None, reasoning=None):
+    config = load_agent_config(model_name, provider_name)  # 读 config/agents.json
+    model = get_local_model(model_name, api_base=config["baseURL"], ...)
+    compressor = SummaryCompressor(**config.get("compressor", {}))
+    return run_deep_agent(
+        prompt, model,
+        max_steps=config.get("max_steps", 8),
+        max_observation_length=config.get("max_observation_length", 2000),
+        compressor=compressor,
+    )
 ```
 
 ---
 
-## 四个内置工具
+## 内置工具
 
 | 工具 | 签名 | 说明 |
 |------|------|------|
-| `read_file` | `read_file(filename, raw=False, offset=0, limit=0) -> str` | 默认每行带 `N#HHHH` 哈希标签；`raw=True` 返回纯文本；`offset`/`limit` 读取范围 |
+| `read_file` | `read_file(filename, offset=0, limit=0) -> str` | 返回文件**纯文本**（无哈希标签）；`offset`/`limit` 读取范围 |
 | `run_python_file` | `run_python_file(filename) -> str` | `subprocess.run(["python3", filename], timeout=30)` 捕获 stdout/stderr |
 
-**精准编辑**通过 ````edit:path``` Markdown 块实现（非 Python 工具），见 `doc/tools.md`。
+**编辑通过 ````file:path``` Markdown 块**整文件重写实现（非 Python 工具），见 `doc/tools.md`。
 
-**安全边界：** `read_file` 本地 I/O 无需隔离；运行脚本、Shell 命令走子进程，30s 超时。
+**安全边界：** `read_file` 本地 I/O 无需隔离；运行脚本走子进程，30s 超时。
 
 ---
 
@@ -158,8 +154,12 @@ def run_deep_agent_with_config(
 
 ### 自定义工具
 
+`run_deep_agent` 使用固定的内置工具集；要加自定义工具，用 `react_loop` 直接组装（传入你的工具列表）：
+
 ```python
-from mini_agent import tool, run_deep_agent, get_local_model
+from mini_agent import tool, get_local_model, read_file, run_python_file
+from mini_agent.react_agent import react_loop
+from mini_agent.prompts import build_deep_system_prompt
 
 @tool
 def fetch_url(url: str) -> str:
@@ -167,11 +167,14 @@ def fetch_url(url: str) -> str:
     import requests
     return requests.get(url, timeout=10).text
 
+tools = [read_file, run_python_file, fetch_url]
 model = get_local_model("ornith:9b")
-result = run_deep_agent(
-    "Download https://example.com and save to page.html",
-    model,
-    tools=[run_python_file, fetch_url],
+result = react_loop(
+    system_prompt=build_deep_system_prompt(tools),
+    task="Download https://example.com and save to page.html",
+    model=model,
+    tools=tools,
+    max_steps=8,
 )
 ```
 

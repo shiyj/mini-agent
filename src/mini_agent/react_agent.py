@@ -11,13 +11,12 @@ import time
 from typing import TYPE_CHECKING
 
 from . import prompts
-from .code_executor import ExecutionResult, execute_code
-from .hashline import apply_edit_block
+from .code_executor import execute_code
 
 if TYPE_CHECKING:
     from .model import ResponsesModel
     from .tools import Tool
-    from .context_compressor import ContextCompressor
+    from .context import ContextCompressor
 
 # ---------------------------------------------------------------------------
 # Block parsing
@@ -25,49 +24,6 @@ if TYPE_CHECKING:
 
 # Languages whose block content is executed (as opposed to written to disk).
 _EXECUTABLE_LANGS = {"python", "py"}
-
-# Known placeholder patterns that should never be treated as real file paths.
-_PLACEHOLDER_PATTERNS = re.compile(
-    r"^(<[^>]*>|your_file_path|path_to_file|path|file_path|"
-    r"file_name|filename|output_file|target_file|"
-    r"destination|output_path|save_path|write_path"
-    r")$",
-    re.IGNORECASE,
-)
-
-
-def _is_valid_path(path: str) -> bool:
-    """Return True if *path* looks like a real file path, not a placeholder.
-
-    Rejects:
-    - Angle-bracket placeholders: ``<your_file_path>``, ``<path>``
-    - Markdown / quote artifacts: backtick, double-quote, single-quote
-    - Empty or whitespace-only strings
-    - Control characters
-    - Known placeholder words (``your_file_path``, ``path_to_file``, etc.)
-    """
-    if not path or not path.strip():
-        return False
-
-    stripped = path.strip()
-
-    # Reject if contains angle brackets (placeholder indicators)
-    if "<" in stripped or ">" in stripped:
-        return False
-
-    # Reject if contains markdown or quote artifacts
-    if "`" in stripped or '"' in stripped or "'" in stripped:
-        return False
-
-    # Reject if contains ASCII control characters
-    if any(ord(c) < 32 for c in stripped):
-        return False
-
-    # Reject known placeholder words
-    if _PLACEHOLDER_PATTERNS.match(stripped):
-        return False
-
-    return True
 
 
 def parse_step(text: str) -> list[tuple[str, str | None, str]]:
@@ -80,30 +36,21 @@ def parse_step(text: str) -> list[tuple[str, str | None, str]]:
         ```lang:path
         content
         ```
-
-    - lang can be any identifier (file, python, py, etc.)
-    - path is optional; if absent for python, the block is saved
-      to a temp file /tmp/mini-agent-{timestamp}-{step}.py for record.
-    - Blocks are returned in document order.
-
-    Normalization: if the model writes ```python\nedit:path or ```python\nfile:path
-    (wrong fence type), it is automatically converted to ```edit:path / ```file:path.
     """
     # Strip special tokens
     text = re.sub(r'<\|mask_start\|>.*?<\|mask_end\|>', '', text, flags=re.DOTALL)
     text = re.sub(r'<\|.*?\|>', '', text)
 
-    # Normalize: ```python\nedit:path or ```python\nfile:path → correct fence
+    # Normalize: ```python\nfile:path → correct fence
     text = re.sub(
-        r'```python\s*\n(edit|file):([^\n]+)',
-        r'```\1:\2',
+        r'```python\s*\nfile:([^\n]+)',
+        r'```file:\1',
         text,
         flags=re.MULTILINE,
     )
 
     # Normalize: ```read_file(...) or ```run_python_file(...) → ```python block
     # (model sometimes uses tool names as fence languages instead of ```python)
-    # Handle both single-line and multi-line forms
     text = re.sub(
         r'```(read_file|run_python_file)\s*\(([^)]*)\)\s*```',
         r'```python\n\1(\2)\n```',
@@ -141,54 +88,35 @@ def write_blocks(
     step: int,
     verbose: bool = False,
     fallback_path: str | None = None,
-) -> tuple[bool, list[str], list[str], list[str]]:
+) -> tuple[bool, list[str], list[str]]:
     """Write all blocks to disk.
 
-    - ``file:path`` (or any non-executable lang) -> write raw content to path.
-    - ``edit:path`` -> apply hash-anchored edits to the file on disk.
+    - ``file:path`` -> write raw content to path (whole-file rewrite).
     - ``python:path`` / ``py:path`` -> write content to path (also executable).
     - ``python`` / ``py`` without path -> write to /tmp/mini-agent-{timestamp}-{step}.py for record.
-    - ``file`` / ``edit`` without path -> error (E011_NO_PATH), reported back
-      to the caller so the model can be nudged.
-    - All paths resolved relative to CWD; parent dirs created.
+    - ``file`` without path / a placeholder path -> error, reported back to the caller.
+    - ``edit:`` is NOT supported — if present it is reported so the model can
+      be nudged back to a ``file:`` rewrite.
 
     Args:
-        fallback_path: If a block uses ``<your_file_path>`` and no other block
+        fallback_path: If a block uses a placeholder path and no other block
             has a real path, use this as fallback.
 
     Returns:
-        (wrote_any, edit_reports, file_reports, path_errors) - ``wrote_any`` is
-        True if at least one block was written/edited; ``edit_reports`` is a
-        list of result strings from edit blocks (success or stale-anchor errors);
-        ``file_reports`` is a list of "written" messages for ``file:`` blocks;
-        ``path_errors`` is a list of error strings for file/edit blocks that had no path.
+        (wrote_any, file_reports, path_errors) - ``wrote_any`` is True if at
+        least one block was written; ``file_reports`` lists "written" messages
+        for ``file:`` blocks; ``path_errors`` lists error strings for blocks
+        that had no path, a placeholder path, or used the unsupported ``edit:``.
     """
     wrote_any = False
-    edit_reports: list[str] = []
     file_reports: list[str] = []
     path_errors: list[str] = []
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     for lang, path, content in blocks:
+        # 'edit:' is no longer a supported edit path — nudge back to file: rewrite
         if lang == "edit":
-            if path is None:
-                path_errors.append(f"[E011_NO_PATH] edit block without path")
-                continue
-            # Auto-replace <your_file_path> placeholder with a real path from other blocks
-            if "<your_file_path>" in (path or ""):
-                real = _find_real_path(blocks, fallback_path)
-                if real:
-                    path = real
-                else:
-                    path_errors.append(f"[E013_INVALID_PATH] edit block has invalid path: {path}")
-                    continue
-            if not _is_valid_path(path):
-                path_errors.append(f"[E013_INVALID_PATH] edit block has invalid path: {path}")
-                continue
-            full_path = os.path.abspath(path)
-            result = apply_edit_block(full_path, content)
-            edit_reports.append(result)
-            wrote_any = True
+            path_errors.append("[E000] edit: is not supported. Rewrite the whole file with a ```file:<path>``` block.")
             continue
 
         if path is None:
@@ -198,25 +126,19 @@ def write_blocks(
                 path = f"/tmp/mini-agent-{ts}-{step}.{ext}"
             else:
                 # Non-executable without path - error
-                path_errors.append(f"[E011_NO_PATH] {lang} block without path")
+                path_errors.append(f"[E011] {lang} block without path")
                 continue
 
-        # Auto-replace <your_file_path> placeholder with a real path from other blocks
+        # Placeholder paths (e.g. <your_file_path>) are mistakes — try to recover
         if "<your_file_path>" in (path or ""):
             real = _find_real_path(blocks, fallback_path)
             if real:
                 path = real
             else:
-                path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {path}")
+                path_errors.append(f"[E013] {lang} block has invalid path: {path}")
                 continue
 
-        # Resolve path relative to CWD
         full_path = os.path.abspath(path)
-
-        # Defensive check: reject placeholder paths that look valid after abspath
-        if not _is_valid_path(path):
-            path_errors.append(f"[E013_INVALID_PATH] {lang} block has invalid path: {path}")
-            continue
 
         try:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -225,32 +147,20 @@ def write_blocks(
             wrote_any = True
             if lang == "file":
                 file_reports.append(f"Written {full_path}")
-        except Exception as e:
+        except Exception:
             pass  # write failures are not fatal; let the model retry
 
-    return wrote_any, edit_reports, file_reports, path_errors
+    return wrote_any, file_reports, path_errors
 
 
 def _find_real_path(blocks: list[tuple[str, str | None, str]], fallback: str | None = None) -> str | None:
     """Find a real file path from other blocks, for auto-replacing ``<your_file_path>``."""
     for _, p, _ in blocks:
-        if p and "<your_file_path>" not in p and _is_valid_path(p):
+        if p and "<your_file_path>" not in p:
             return p
-    # Fallback: use the path from a previous step (known to be valid)
-    if fallback and _is_valid_path(fallback):
+    if fallback:
         return fallback
     return None
-
-
-def _safe_read_file(path: str) -> str | None:
-    """Read a file and return it with hash tags, or None on failure."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        from .hashline import tag_lines
-        return tag_lines(text)
-    except Exception:
-        return None
 
 
 def _truncate_observation(text: str, max_length: int) -> str:
@@ -307,7 +217,6 @@ def react_loop(
         {"role": "user", "content": task},
     ]
     recent_outputs: list[str] = []
-    consecutive_loops = 0
     syntax_warns = 0
     written_path: str | None = None  # path the model wrote this/last step (from its blocks)
 
@@ -316,8 +225,6 @@ def react_loop(
     last_step_had_error = False    # B-rule: previous step had an error
     no_progress = 0                # no-write/verify progress counter
     no_code_counter = 0            # consecutive steps without any code block
-    read_only_counter = 0          # consecutive steps that only read, never edit
-    stale_counter = 0              # consecutive E009 stale-anchor failures
     # ---------------------------------------------------
 
     stop_sequences = ["Observation:"]
@@ -393,22 +300,19 @@ def react_loop(
 
         _log(verbose, f"Model output:\n{output}", limit=500)
 
-        # 2a. Loop detection — repeated identical output means the model is stuck
-        recent_outputs.append(output)
-        if len(recent_outputs) >= 3 and recent_outputs[-1] == recent_outputs[-2] == recent_outputs[-3]:
-            consecutive_loops += 1
-            if consecutive_loops >= 3:
-                _log(verbose, "[loop] Stuck after 2 warnings — stopping")
-                return prompts.format_error(prompts.E007_LOOP, detail=written_path or "the file")
+        # 2a. Loop detection — a step identical to the previous one means the model
+        # is stuck. Nudge it once toward the ```file: rewrite path.
+        if recent_outputs and output == recent_outputs[-1]:
+            nudge = (
+                "Warning: your output matches the previous step — you appear to be stuck. "
+                "Rewrite the whole file with a "
+                f"```file:{written_path or '<path>'}``` block, run it, then final_answer()."
+            )
             messages.append({"role": "assistant", "content": output})
-            messages.append({
-                "role": "user",
-                "content": prompts.format_error(prompts.E007_LOOP, detail=written_path or "the file"),
-            })
-            _log(verbose, f"[loop] Warning #{consecutive_loops} — identical output detected")
+            messages.append({"role": "user", "content": nudge})
+            _log(verbose, "[loop] Identical output — nudging once")
             continue
-        else:
-            consecutive_loops = 0
+        recent_outputs.append(output)
 
         # 2. Parse the step: all blocks
         blocks = parse_step(output)
@@ -417,7 +321,6 @@ def react_loop(
             no_code_counter += 1
             messages.append({"role": "assistant", "content": output})
             if no_code_counter >= 3:
-                # Force template after 3 consecutive text-only responses
                 template = (
                     f"You have produced {no_code_counter} text-only responses. "
                     f"Copy this exact template:\n"
@@ -436,79 +339,28 @@ def react_loop(
         no_code_counter = 0
 
         # 3. Write ALL file/executable blocks to disk FIRST
-        wrote_this_step, edit_reports, file_reports, path_errors = write_blocks(blocks, step, verbose, written_path)
-        # Only file:/edit: blocks count as "writing the target file" -
-        # executable blocks saved to temp files do NOT fix the file on disk.
-        wrote_target = bool(file_reports or edit_reports)
+        _, file_reports, path_errors = write_blocks(blocks, step, verbose, written_path)
+        wrote_target = bool(file_reports)
 
-        # 3a. Path error detection - file:/edit: block without a path or invalid path
+        # 3a. Path error — a file:/edit: block had no path or a placeholder path.
         if path_errors:
             messages.append({"role": "assistant", "content": output})
-            # Determine which error prompt to use based on the error code
-            has_invalid_path = any(e.startswith("[E013") for e in path_errors)
-            error_code = prompts.E013_INVALID_PATH if has_invalid_path else prompts.E011_NO_PATH
-            messages.append({
-                "role": "user",
-                "content": prompts.format_error(error_code),
-            })
+            all_bad = any("[E000]" in e for e in path_errors)
+            nudge = (
+                "You used an unsupported ```edit:``` block or a file block without a valid path. "
+                "Rewrite the WHOLE file with ```file:<real_path>```, then run it."
+            ) if all_bad else "\n".join(path_errors) + (
+                "\nSpecify a real path in the ```file:<real_path>``` header, then run it to verify."
+            )
+            messages.append({"role": "user", "content": nudge})
             _log(verbose, f"[path-error] {path_errors}")
             continue
 
-        # Track the path the model actually wrote (file:/edit:/executable:path),
-        # so error-recovery prompts and the run instruction can reference it.
+        # Track the path the model actually wrote so follow-up prompts can reference it.
         for lang, p, _ in blocks:
-            if p and (lang == "file" or lang == "edit" or lang in _EXECUTABLE_LANGS):
+            if p and (lang == "file" or lang in _EXECUTABLE_LANGS):
                 written_path = p
                 break
-
-        # 3a. Stale anchor detection — if any edit block hit a hash mismatch,
-        # inject E009 recovery with the CORRECT hash extracted from the error
-        stale = [r for r in edit_reports if r.startswith("[E_STALE_ANCHOR]")]
-        if stale:
-            messages.append({"role": "assistant", "content": output})
-            read_only_counter = 0  # reset: model attempted to edit, hash was stale
-            stale_counter += 1
-            # After 2 consecutive stale-anchor failures the file is likely
-            # corrupted by a bad edit (e.g. single-anchor replace with multi-line
-            # content that duplicated lines). Incremental editing can't recover —
-            # force a clean full-file rewrite instead.
-            if stale_counter >= 2:
-                fresh = _safe_read_file(written_path) if written_path else None
-                recovery = (
-                    f"Error E009 (repeated): editing line-by-line is not working — "
-                    f"the file may be corrupted. STOP editing. Rewrite the ENTIRE file "
-                    f"with a ```file:{written_path}``` block containing the full corrected "
-                    f"content (raw, no quotes), then ```python\\n"
-                    f"run_python_file('{written_path}')\\nfinal_answer('done')\\n```."
-                )
-                if fresh:
-                    recovery += f"\n\nCurrent file content:\n{fresh}"
-                messages.append({"role": "user", "content": recovery})
-                _log(verbose, f"[stale-escalate] Forcing full rewrite after {stale_counter} E009")
-                continue
-            # First stale failure: extract the correct hash and hand it back.
-            # The error format is: "Line N#WRONG has changed (now N#CORRECT)."
-            import re as _re
-            correct_hashes = []
-            for s in stale:
-                m = _re.search(r'now (\d+#[0-9a-f]{4})', s)
-                if m:
-                    correct_hashes.append(m.group(1))
-            if correct_hashes:
-                hash_str = ", ".join(correct_hashes)
-                recovery = (
-                    f"Error E009: Hash mismatch. The correct hash(es) are: {hash_str}.\n"
-                    f"Use these EXACT anchors in your ```edit:{written_path}``` block.\n"
-                    f"Do NOT reuse the old hash — it has changed."
-                )
-            else:
-                recovery = prompts.format_error(prompts.E009_STALE_ANCHOR, detail=written_path)
-            messages.append({"role": "user", "content": recovery})
-            continue
-        else:
-            # Any non-stale edit outcome resets the escalation counter
-            if edit_reports:
-                stale_counter = 0
 
         # 4. Find the FIRST executable block (python) to run
         exec_code = None
@@ -520,16 +372,9 @@ def react_loop(
                 break
 
         if exec_code is None:
-            if edit_reports:
-                # Edit-only step — surface edit results as observation
-                observation = "\n".join(edit_reports)
-                messages.append({"role": "assistant", "content": output})
-                messages.append({"role": "user", "content": f"Observation:\n{observation}"})
-                continue
             if file_reports:
                 # A ```file:path``` block was written but there is no executable
-                # block to verify it. Surface "file written" as an observation
-                # instead of a spurious E001, and prompt the model to run/verify.
+                # block to verify it. Surface that and prompt the model to run it.
                 observation = "\n".join(file_reports) + (
                     f"\nFile written. Call run_python_file('{written_path}') "
                     "to verify it works, then final_answer(...)."
@@ -550,41 +395,37 @@ def react_loop(
 
         result = execute_code(exec_code, tools)
 
-        # 5a. SyntaxError recovery: the model's own generated code
-        # failed to compile — almost always a quote/escape conflict from
-        # embedding a whole file inside a string literal. Nudge it to the
-        # ```file:path block path.
+        # 5a. SyntaxError recovery — the model's own code failed to compile,
+        # usually a quote/escape clash from embedding the whole file in a string.
+        # Nudge it to the ```file:path``` rewrite path.
         if result.error and result.error.startswith("SyntaxError") and syntax_warns < 3:
             syntax_warns += 1
             messages.append({"role": "assistant", "content": output})
             messages.append({
                 "role": "user",
-                "content": prompts.format_error(prompts.E010_SYNTAX, detail=written_path),
+                "content": (
+                    "SyntaxError in your code. Write the file with a ```file:<real_path>``` "
+                    "block containing the raw content (NOT inside a Python string, NOT inside "
+                    "a ```python block). Then verify with ```python\nrun_python_file('<path>')\n```."
+                ),
             })
             _log(verbose, f"[syntax-warning] #{syntax_warns} — code had a SyntaxError")
             continue
 
-        # --- NEW: track tool usage and error state for final_answer verification ---
-        # C-rule: track if any tool has been called
-        if result.tool_calls:
+        # C-rule: count a tool call OR writing a ```file: block as real work,
+        # so a model that writes a file and then final_answers is not rejected.
+        if result.tool_calls or wrote_target:
             has_used_tool = True
 
-        # Track read-only loop: consecutive steps that only call read_file
-        if wrote_target or "run_python_file" in result.tool_calls:
-            read_only_counter = 0
-        elif "read_file" in result.tool_calls and not wrote_target:
-            read_only_counter += 1
         # B-rule: track if this step had an error
         step_had_error = bool(result.error)
-        # Also check tool output for failure indicators
         if not step_had_error and result.logs:
             error_indicators = ["FAILED", "Traceback", "Error:", "exit="]
             if any(ind in result.logs for ind in error_indicators):
                 step_had_error = True
-        # -------------------------------------------------------------------------
 
-        # 5c. No-progress guard: if the model keeps producing steps that neither
-        # write, verify, nor finalize, it is stuck. Stop early.
+        # 5c. No-progress guard: steps that neither write nor finalize mean the
+        # model is stuck (e.g. only reading). Stop early instead of burning steps.
         made_progress = wrote_target or result.is_final_answer
         if made_progress:
             no_progress = 0
@@ -592,12 +433,13 @@ def react_loop(
             no_progress += 1
         if no_progress >= 6:
             _log(verbose, "[no-progress] Stopping after 6 unproductive steps")
-            return prompts.format_error(prompts.E008_NO_PROGRESS, detail=written_path)
+            return (
+                "Stopped: no progress for 6 steps (no file written, no final answer). "
+                f"Re-read '{written_path}' and rewrite it with a ```file:``` block."
+            )
 
         # 6. Build observation
         parts: list[str] = []
-        if edit_reports:
-            parts.extend(edit_reports)
         if result.error:
             parts.append(f"Execution logs:\n{result.logs}\nError:\n{result.error}")
         else:
@@ -614,31 +456,15 @@ def react_loop(
 
         _log(verbose, f"\nObservation:\n{observation}", limit=500)
 
-        # 6b. Read-only loop guard: if model only reads for 3+ steps, push it to edit
-        if read_only_counter >= 3:
-            read_only_counter = 0
-            push = (
-                "You have only been reading the file for 3+ steps without making changes. "
-                "You MUST edit the file NOW. Use ```edit:{path}``` or ```file:{path}``` "
-                "to fix the bugs, then ```python\nrun_python_file('{path}')\nfinal_answer('done')\n```"
-            ).format(path=written_path or "the_file")
-            messages.append({"role": "assistant", "content": output})
-            messages.append({"role": "user", "content": push})
-            _log(verbose, "[read-only-guard] Pushing model to edit after 3 read-only steps")
-            continue
-
         # 7. Check for final_answer — STRICT VERIFICATION
         if result.is_final_answer:
-            # --- Rule B (E003): final_answer after an error in previous step ---
+            # --- Rule B (E003): final_answer after an error in the previous step ---
             if last_step_had_error or step_had_error:
-                # Extract error summary for the message
                 error_summary = result.error or "previous step failed"
-                if not result.error and "logs" in vars(result) and result.logs:
-                    # Check logs for error indicators
+                if not result.error and result.logs:
                     for ind in ["FAILED", "Traceback", "Error:", "exit="]:
-                        if ind in result.logs:
-                            # Extract a short snippet
-                            idx = result.logs.find(ind)
+                        idx = result.logs.find(ind)
+                        if idx != -1:
                             error_summary = result.logs[idx:idx+200]
                             break
                 messages.append({"role": "assistant", "content": output})
@@ -666,9 +492,8 @@ def react_loop(
         # Update last_step_had_error for next iteration
         last_step_had_error = step_had_error
 
-        # 7a. Warn if code ran without writing the file — file on disk is NOT fixed.
-        # Only warn after step 2 (model should read first, then fix), and do NOT
-        # warn on verification or read steps (run_python_file / read_file)
+        # 7a. Warn if code ran without writing any file — nothing is fixed on disk.
+        # Not warned on pure read/verify steps, nor right after the task starts.
         if (
             not result.error
             and not wrote_target
@@ -676,28 +501,9 @@ def react_loop(
             and "read_file" not in result.tool_calls
             and step >= 3
         ):
-            read_only = "open(" in exec_code or ".read(" in exec_code
-            # Detect the "assign fixed CODE to a variable but never write" pattern.
-            # Only treat as a fix variable if the assigned value looks like code
-            # (contains def/import/class/return), NOT plain data like DATA = """...""".
-            var = None
-            m = re.search(r'(\w+)\s*=\s*("""|\'\'\')', exec_code)
-            if m:
-                val = exec_code[m.end():m.end() + 300]
-                if re.search(r'\b(def |import |class |return |print\()', val):
-                    var = m.group(1)
-            if var:
-                code_key = prompts.E005_WRITE_VAR
-            elif read_only:
-                code_key = prompts.E004_WRITE_READONLY
-            else:
-                code_key = prompts.E006_WRITE_GENERIC
-            msg = prompts.format_error(code_key, detail=written_path)
+            msg = prompts.format_error(prompts.E004_NO_WRITE, detail=written_path)
             messages.append({"role": "assistant", "content": output})
-            messages.append({
-                "role": "user",
-                "content": msg,
-            })
+            messages.append({"role": "user", "content": msg})
             _log(verbose, f"\n[no-write-warning] {msg}")
             continue
 
