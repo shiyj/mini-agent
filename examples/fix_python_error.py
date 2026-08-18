@@ -14,8 +14,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from mini_agent import get_local_model, run_deep_agent
-from mini_agent.config import load_agent_config
+from mini_agent import load_model, run_deep_agent
 
 # Work under examples/data/ so the agent edits scripts in a clean directory
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -70,28 +69,23 @@ stripped = "\n".join(
 cleaned = re.sub(r"\n{3,}", "\n\n", stripped).strip() + "\n"
 TARGET.write_text(cleaned, encoding="utf-8")
 
-print("[2/3] Loading model config from config/agents.json ...")
+print("[2/3] Loading model from config ...")
 print("[3/3] Running deep agent ...")
 print("=" * 60)
 
 TASK = f"{TARGET} cannot run, find the problem and fix it."
 
-config = load_agent_config("ornith:9b", provider_name="ollama-local")
-model = get_local_model(
-    model_name=config["model_name"],
-    api_base=config["baseURL"],
-    api_key=config.get("apiKey"),
-    temperature=args.temperature,
-    max_output_tokens=config["max_output_tokens"],
-    context_window=config["context_window"],
+model, compressor = load_model(
+    model_name="ornith:9b",
+    provider_name="ollama-local",
     log_file=str(LOG_FILE),
 )
 
 result = run_deep_agent(
     prompt=TASK,
     model=model,
-    max_steps=config.get("max_steps", 8),
-    max_observation_length=config.get("max_observation_length", 2000),
+    max_steps=8,
+    max_observation_length=2000,
 )
 
 print("=" * 60)

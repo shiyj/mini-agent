@@ -13,11 +13,7 @@ import subprocess
 import os
 from pathlib import Path
 
-from mini_agent import (
-    get_local_model,
-    run_deep_agent,
-    run_fast_agent,
-)
+from mini_agent import load_model, run_deep_agent
 from mini_agent.prompts import FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT
 
 
@@ -37,9 +33,9 @@ _MODEL: object | None = None
 def _model():
     global _MODEL
     if _MODEL is None:
-        _MODEL = get_local_model(
+        _MODEL, _ = load_model(
             model_name="ornith:9b",
-            temperature=0.0,
+            provider_name="ollama-local",
         )
     return _MODEL
 
@@ -111,12 +107,7 @@ def step_deep_agent_loop_optimization() -> None:
         if os.path.exists(target):
             os.remove(target)
 
-        temp = min(0.45 + (attempt - 1) * 0.03, 0.7)
-        model = get_local_model(
-            model_name="ornith:9b",
-            api_base="http://127.0.0.1:11434",
-            temperature=temp,
-        )
+        model = _model()
 
         start = time.time()
         result = run_deep_agent(

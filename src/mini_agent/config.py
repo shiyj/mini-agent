@@ -1,7 +1,7 @@
 """Configuration loader — per-model agent settings.
 
 One config file in config/:
-  - agents.json     — per-model settings (providers, context window, compressor, etc.)
+  - agents.json     — per-model settings (providers, context window, etc.)
 """
 
 import json
@@ -9,16 +9,14 @@ import os
 import re
 from pathlib import Path
 
+from .context import SummaryCompressor
+
+
+_agents_cache: dict | None = None
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
-
-
-# ---------------------------------------------------------------------------
-# Agent config (per-model settings)
-# ---------------------------------------------------------------------------
-
-_agents_cache: dict | None = None
 
 
 def _resolve_env(value: str) -> str:
@@ -39,12 +37,12 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return base
 
 
-def load_agent_config(
+def _load_agent_config(
     model_name: str,
     provider_name: str | None = None,
     agents_path: str | Path | None = None,
 ) -> dict:
-    """Load and merge configuration for a given model.
+    """Load and merge configuration for a given model (internal use only).
 
     Resolution order:
       1. defaults  →  2. provider.base  →  3. model-specific settings
@@ -57,8 +55,7 @@ def load_agent_config(
     Returns:
         A flat dict with keys:
           ``baseURL``, ``apiKey``, ``context_window``, ``max_output_tokens``,
-          ``max_observation_length``, ``max_steps``, ``compressor`` (dict),
-          ``model_name``, ``provider_name``.
+          ``max_observation_length``, ``max_steps``, ``model_name``, ``provider_name``.
     """
     global _agents_cache
     if agents_path is None:
@@ -77,7 +74,6 @@ def load_agent_config(
 
     # Start with defaults
     result = dict(data.get("defaults", {}))
-    result.setdefault("compressor", {})
 
     # Find matching provider
     providers: dict = data.get("providers", {})
@@ -122,14 +118,67 @@ def load_agent_config(
     # Apply model-specific overrides
     model_cfg: dict = p_cfg["models"][model_name]
     for key, val in model_cfg.items():
-        if key == "compressor":
-            result.setdefault("compressor", {}).update(val)
-        else:
-            result[key] = val
+        result[key] = val
 
     result["model_name"] = model_name
     result["provider_name"] = p_name
     return result
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+_DEFAULT_COMPRESSOR = SummaryCompressor(
+    max_messages=20,
+    compress_batch=5,
+    keep_recent=6,
+    max_summary_tokens=512,
+)
+
+
+def load_model(
+    model_name: str,
+    provider_name: str | None = None,
+    *,
+    log_file: str | None = None,
+    reasoning: dict | None = None,
+    agents_path: str | Path | None = None,
+) -> tuple["ResponsesModel", "SummaryCompressor"]:
+    """Load a model from agents.json configuration.
+
+    This is the single entry point for creating a model from config.
+    All model parameters (baseURL, apiKey, temperature, context_window,
+    max_output_tokens, max_steps, max_observation_length) are read from
+    agents.json. Only runtime-only options (log_file, reasoning) can be
+    overridden here.
+
+    Args:
+        model_name: Model identifier (e.g. "ornith:9b", "gpt-4o").
+        provider_name: Provider name to disambiguate (e.g. "ollama-local").
+        log_file: Optional JSONL log file path for request/response logging.
+        reasoning: Optional reasoning config for the model.
+        agents_path: Optional custom path to agents.json.
+
+    Returns:
+        A tuple of (ResponsesModel, SummaryCompressor with hardcoded defaults).
+    """
+    from .model import ResponsesModel
+
+    config = _load_agent_config(model_name, provider_name, agents_path)
+
+    model = ResponsesModel(
+        model_name=config["model_name"],
+        api_base=config["baseURL"],
+        api_key=config.get("apiKey") or None,
+        temperature=config.get("temperature", 0.0),
+        max_output_tokens=config.get("max_output_tokens", 4096),
+        context_window=config.get("context_window", 65536),
+        log_file=log_file,
+        reasoning=reasoning,
+    )
+
+    return model, _DEFAULT_COMPRESSOR
 
 
 def _default_config(model_name: str) -> dict:
@@ -140,12 +189,7 @@ def _default_config(model_name: str) -> dict:
         "max_output_tokens": 4096,
         "max_observation_length": 2000,
         "max_steps": 8,
-        "compressor": {
-            "max_messages": 20,
-            "compress_batch": 5,
-            "keep_recent": 6,
-            "max_summary_tokens": 512,
-        },
+        "temperature": 0.0,
         "model_name": model_name,
         "provider_name": "",
     }

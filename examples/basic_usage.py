@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Basic usage: create a model and run the fast agent with prefill enabled."""
+"""Basic usage: load a model from config and run the fast agent with prefill enabled."""
 
-from mini_agent import get_local_model, run_fast_agent
+from mini_agent import load_model, run_fast_agent
 
-# 1. Create a model — explicitly configure model + server
-model = get_local_model(
+# 1. Load a model from config — just provider + model name
+model, compressor = load_model(
     model_name="ornith:9b",
-    temperature=0.0,
+    provider_name="ollama-local",
 )
 
 # 2. Run the fast agent

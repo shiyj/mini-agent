@@ -14,60 +14,17 @@ Architecture:
   │  Use: complex scripts, debugging, iterative tasks    │
   └──────────────────────────────────────────────────────┘
 
-Users create the model externally and pass it in.
+Users create the model via config.load_model() and pass it in.
 """
 
 import subprocess
 import sys
 
-from .config import load_agent_config
-from .context import ContextCompressor, SummaryCompressor
+from .config import load_model
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT, build_deep_system_prompt
 from .react_agent import react_loop
 from .tools import Tool, tool
-
-
-# ---------------------------------------------------------------------------
-# 1. Convenience model factory (optional — users can build models directly)
-# ---------------------------------------------------------------------------
-
-def get_local_model(
-    model_name: str,
-    api_base: str = "http://localhost:11434",
-    api_key: str | None = None,
-    temperature: float = 0.1,
-    max_output_tokens: int = 4096,
-    context_window: int = 65536,
-    log_file: str | None = None,
-    reasoning: dict | None = None,
-) -> ResponsesModel:
-    """Create a model that talks to a ``/v1/responses`` endpoint.
-
-    Uses ``httpx`` directly.
-
-    Args:
-        model_name: Model tag, e.g. ``"ornith:9b"``.
-        api_base: Server base URL.
-        api_key: Optional API key for authenticated endpoints.
-        temperature: Sampling temperature.
-        max_output_tokens: Maximum tokens the model may generate.
-        context_window: Model's maximum context window in tokens.
-        log_file: Optional path to a JSONL file for request/response logging.
-
-    Returns:
-        A configured ``ResponsesModel``.
-    """
-    return ResponsesModel(
-        model_name=model_name,
-        api_base=api_base,
-        api_key=api_key,
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-        context_window=context_window,
-        log_file=log_file,
-        reasoning=reasoning,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +145,6 @@ def run_deep_agent(
     model: ResponsesModel,
     max_steps: int = 8,
     max_observation_length: int = 2000,
-    compressor: ContextCompressor | None = None,
     verbose: bool = True,
 ) -> str:
     """Deep ReAct: read -> rewrite whole file (```file:) -> run -> final.
@@ -196,18 +152,22 @@ def run_deep_agent(
     System prompt is built by ``build_deep_system_prompt()`` from
     ``prompts.py`` - the single source of truth for all prompt text.
 
+    Uses a default SummaryCompressor with hardcoded defaults internally.
+
     Args:
         prompt: Task description.
         model: A ``ResponsesModel`` instance. Any object with the same
             ``generate()`` interface works (e.g. a stub in tests).
         max_steps: Maximum ReAct iterations (8-15 recommended).
         max_observation_length: Max characters for observation content (0 = no truncation).
-        compressor: Optional context compressor (e.g. SummaryCompressor).
         verbose: Print step-by-step progress to stderr.
 
     Returns:
         The final agent output after all iterations.
     """
+    from .context import SummaryCompressor
+    from .config import _DEFAULT_COMPRESSOR
+
     tools = [run_python_file, read_file]
 
     # Build the system prompt - all text comes from prompts.py
@@ -221,59 +181,5 @@ def run_deep_agent(
         max_steps=max_steps,
         max_observation_length=max_observation_length,
         verbose=verbose,
-        compressor=compressor,
-    )
-
-
-def run_deep_agent_with_config(
-    prompt: str,
-    model_name: str,
-    provider_name: str | None = None,
-    log_file: str | None = None,
-    reasoning: dict | None = None,
-) -> str:
-    """One-shot deep agent: load config, create model, build compressor, run.
-
-    This is the simplest entry point — just provide a model name.
-
-    Args:
-        prompt: Task description.
-        model_name: Model identifier (e.g. ``"deepseek-chat"``, ``"gpt-4o"``).
-        provider_name: Optional provider name to disambiguate models.
-        log_file: Optional path to a JSONL log file.
-
-    Returns:
-        The final agent output after all iterations.
-    """
-    config = load_agent_config(model_name, provider_name=provider_name)
-
-    model = get_local_model(
-        model_name=model_name,
-        api_base=config["baseURL"],
-        api_key=config.get("apiKey") or None,
-        max_output_tokens=config["max_output_tokens"],
-        context_window=config["context_window"],
-        log_file=log_file,
-        reasoning=reasoning,
-    )
-
-    # Compressor is opt-in: clear short tasks (the common case for small
-    # models) never need LLM summarization - it just adds cost and latency.
-    # Enable per-model in agents.json with "compressor": {"enabled": true, ...}.
-    compressor_cfg = config.get("compressor") or {}
-    compressor = None
-    if compressor_cfg.get("enabled", False):
-        compressor = SummaryCompressor(
-            max_messages=compressor_cfg.get("max_messages", 20),
-            compress_batch=compressor_cfg.get("compress_batch", 5),
-            keep_recent=compressor_cfg.get("keep_recent", 6),
-            max_summary_tokens=compressor_cfg.get("max_summary_tokens", 512),
-        )
-
-    return run_deep_agent(
-        prompt=prompt,
-        model=model,
-        max_steps=config.get("max_steps", 8),
-        max_observation_length=config.get("max_observation_length", 2000),
-        compressor=compressor,
+        compressor=_DEFAULT_COMPRESSOR,
     )

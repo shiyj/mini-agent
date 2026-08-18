@@ -8,28 +8,25 @@ ReAct architecture with two depths:
 """
 
 from .agent import (
-    get_local_model,
+    load_model,
     read_file,
     run_python_file,
     run_fast_agent,
     run_deep_agent,
-    run_deep_agent_with_config,
 )
-from .config import load_agent_config
+from .config import load_model
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
 from .tools import Tool, tool
 from .types import ChatMessage, MessageRole, TokenUsage
 
 __all__ = [
-    "get_local_model",
+    "load_model",
     "ResponsesModel",
     "read_file",
     "run_python_file",
     "run_fast_agent",
     "run_deep_agent",
-    "run_deep_agent_with_config",
-    "load_agent_config",
     "ContextCompressor",
     "SummaryCompressor",
     "Tool",

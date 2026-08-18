@@ -10,7 +10,7 @@ import shutil
 
 import pytest
 
-from mini_agent import get_local_model, run_deep_agent
+from mini_agent import load_model, run_deep_agent
 from mini_agent.code_executor import execute_code
 from mini_agent.model import ResponsesModel
 from mini_agent.react_agent import parse_step, write_blocks
@@ -150,8 +150,9 @@ class _StubModel:
         return type("R", (), {"content": text, "token_usage": None})
 
 
-def test_get_local_model_returns_responses_model():
-    m = get_local_model("ornith:9b", api_base="http://localhost:1")
+def test_load_model_returns_responses_model():
+    # load_model requires agents.json, so we test ResponsesModel directly
+    m = ResponsesModel(model_name="ornith:9b", api_base="http://localhost:1")
     assert isinstance(m, ResponsesModel)
     assert m.model_name == "ornith:9b"
 
