@@ -27,16 +27,6 @@ def _resolve_env(value: str) -> str:
     return re.sub(r"\$\{(\w+)\}", _replace, value)
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Deep merge override into base (modifies base in place)."""
-    for key, val in override.items():
-        if key in base and isinstance(base[key], dict) and isinstance(val, dict):
-            _deep_merge(base[key], val)
-        else:
-            base[key] = val
-    return base
-
-
 def _load_agent_config(
     model_name: str,
     provider_name: str | None = None,
@@ -66,9 +56,7 @@ def _load_agent_config(
         return _default_config(model_name)
 
     if _agents_cache is None:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        _deep_merge(raw, {})  # ensure mutable
-        _agents_cache = raw
+        _agents_cache = json.loads(path.read_text(encoding="utf-8"))
 
     data = _agents_cache
 
@@ -129,13 +117,6 @@ def _load_agent_config(
 # Public API
 # ---------------------------------------------------------------------------
 
-_DEFAULT_COMPRESSOR = SummaryCompressor(
-    max_messages=20,
-    compress_batch=5,
-    keep_recent=6,
-    max_summary_tokens=512,
-)
-
 
 def load_model(
     model_name: str,
@@ -161,7 +142,9 @@ def load_model(
         agents_path: Optional custom path to agents.json.
 
     Returns:
-        A tuple of (ResponsesModel, SummaryCompressor with hardcoded defaults).
+        A tuple of (ResponsesModel, SummaryCompressor with default settings).
+        The compressor is a FRESH instance per call - never shared - so
+        concurrent agents cannot corrupt each other's state.
     """
     from .model import ResponsesModel
 
@@ -178,7 +161,7 @@ def load_model(
         reasoning=reasoning,
     )
 
-    return model, _DEFAULT_COMPRESSOR
+    return model, SummaryCompressor()
 
 
 def _default_config(model_name: str) -> dict:

@@ -20,7 +20,6 @@ Users create the model via config.load_model() and pass it in.
 import subprocess
 import sys
 
-from .config import load_model
 from .model import ResponsesModel
 from .prompts import FAST_AGENT_SYSTEM, FAST_AGENT_PREFILL, FAST_AGENT_PREFILL_TEXT, build_deep_system_prompt
 from .react_agent import react_loop
@@ -152,7 +151,8 @@ def run_deep_agent(
     System prompt is built by ``build_deep_system_prompt()`` from
     ``prompts.py`` - the single source of truth for all prompt text.
 
-    Uses a default SummaryCompressor with hardcoded defaults internally.
+    Uses a default SummaryCompressor (fresh instance per run). Its compress()
+    is a no-op below ~20 messages, so short clear tasks incur no cost.
 
     Args:
         prompt: Task description.
@@ -166,7 +166,6 @@ def run_deep_agent(
         The final agent output after all iterations.
     """
     from .context import SummaryCompressor
-    from .config import _DEFAULT_COMPRESSOR
 
     tools = [run_python_file, read_file]
 
@@ -181,5 +180,5 @@ def run_deep_agent(
         max_steps=max_steps,
         max_observation_length=max_observation_length,
         verbose=verbose,
-        compressor=_DEFAULT_COMPRESSOR,
+        compressor=SummaryCompressor(),
     )

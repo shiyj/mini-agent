@@ -2,8 +2,8 @@
 """End-to-end verification for mini_agent with retry.
 
 Tests:
-1. Prompt loading from config/prompts.json
-2. Model connectivity via ResponsesModel (simple completion)
+1. Prompt constants from prompts.py
+2. Model connectivity via config-loaded ResponsesModel (simple completion)
 3. Deep agent on a loop-optimisation task (with retry)
 """
 

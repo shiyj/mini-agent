@@ -2,7 +2,9 @@
 
 ## 概述
 
-使用 `httpx` 直接调用 Ollama `/v1/responses` 端点（兼容 OpenAI Responses API）。
+使用 `httpx` 直接调用兼容 OpenAI Responses API 的 `/v1/responses` 端点（Ollama、自建代理等）。
+
+单次 POST 请求，无流式模式。空白输出自动重试（温度 +0.25，最多 1 次）。
 
 ---
 
@@ -16,7 +18,8 @@ class ResponsesModel:
         api_base: str = "http://localhost:11434",
         temperature: float = 0.0,
         max_output_tokens: int = 512,
-        stream: bool = False,
+        context_window: int = 65536,
+        log_file: str | None = None,
         reasoning: dict | None = None,      # 如 {"effort": "low"}
         timeout: tuple = (10.0, 180.0),     # (connect, total)
     ):
@@ -27,8 +30,9 @@ class ResponsesModel:
 | `api_base` | `http://localhost:11434` | 自动去除末尾 `/v1` |
 | `temperature` | `0.0` | 采样温度 |
 | `max_output_tokens` | `512` | 最大生成长度 |
-| `stream` | `False` | 非流式（单次 POST 返回全部） |
+| `context_window` | `65536` | 模型上下文窗口（供 compressor 估算用） |
 | `reasoning` | `None` | 可选 `{"effort": "low|medium|high"}` 控制推理深度 |
+| `log_file` | `None` | 可选 JSONL 请求/响应日志路径 |
 
 ---
 
@@ -53,7 +57,6 @@ def generate(
      "instructions": "...",    # system 消息
      "temperature": 0.4,
      "max_output_tokens": 4096,
-     "stream": false,
      "reasoning": {"effort": "low"}
    }
 4. 空白重试：响应文本为空 → 温度 +0.25 重试 1 次
@@ -62,28 +65,6 @@ def generate(
 7. 应用 stop_sequences 截断
 8. 返回 ChatMessage(content, token_usage, raw=response)
 ```
-
----
-
-## SSE 流式模式（stream=True）
-
-```python
-async def generate_stream(self, messages, stop_sequences):
-    async with httpx.AsyncClient(...) as client:
-        async with client.stream("POST", "/v1/responses", json=body) as resp:
-            async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    data = json.loads(line[6:])
-                    if data.get("type") == "response.output_text.delta":
-                        yield data["delta"]
-                    elif data.get("type") == "response.completed":
-                        break
-```
-
-**事件处理：**
-- `response.output_text.delta` → 累加到输出
-- `response.completed` → 提取 usage，回退从 `response.output` 提取 text
-- 跳过 `type: "reasoning"` 思考块
 
 ---
 
@@ -141,9 +122,8 @@ model = ResponsesModel(
     api_base="http://localhost:11434",
     temperature=0.4,
     max_output_tokens=4096,
-    stream=False,
     reasoning={"effort": "low"},
 )
 
-result = run_deep_agent("Fix the bug in foo.py", model, target_file="foo.py")
+result = run_deep_agent("Fix the bug in foo.py", model)
 ```

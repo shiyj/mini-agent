@@ -8,7 +8,6 @@ ReAct architecture with two depths:
 """
 
 from .agent import (
-    load_model,
     read_file,
     run_python_file,
     run_fast_agent,

@@ -26,19 +26,18 @@ uv sync
 
 ## 使用
 
-### 0. 创建模型
+### 0. 加载模型
+
+所有模型从 `config/agents.json` 加载--只传 provider + model 名，零参数：
 
 ```python
-from mini_agent import get_local_model
+from mini_agent import load_model
 
-model = get_local_model(
-    model_name="ornith:9b",
-    api_base="http://YOUR_OLLAMA_HOST:11434",
-    temperature=0.0,
-)
+model, compressor = load_model("ornith:9b", "ollama-local")
 ```
 
-`ResponsesModel` 也可直接构造，参见 [custom_model.py](examples/custom_model.py)。
+需要完全自定义参数（温度、api_base 等）时直接构造 `ResponsesModel`，
+参见 [custom_model.py](examples/custom_model.py)。
 
 ### 1. 🏎️ 极速流 — 单次代码生成
 
@@ -67,8 +66,7 @@ Qwen 系模型（如 ornith:9b）有 Ollama 原生的「思考模式」：
 | Fibonacci 耗时 | ❌ 10-80s / 500-4000 tokens | ✅ 1-2s / 48 tokens |
 | 平均 token 数 | ~315 | ~136 |
 
-关闭 prefill：`run_fast_agent(prompt, model, prefill=False)`，
-或修改 `config/prompts.json` 中 `"prefill": false`。
+关闭 prefill：`run_fast_agent(prompt, model, prefill=False)`。
 
 ### 2. 🧠 深思流 — 自动纠错循环
 
@@ -100,8 +98,8 @@ run_python_file('target.py')
 final_answer("Fixed")
 ```
 ```
-- 所有 ````file:``` / ````python:``` / ````bash:``` 块**先写入磁盘**
-- 仅**第一个** ````python``` / ````bash``` 块在 `exec()` 中执行（注入工具、final_answer）
+- 所有 ````file:``` 块**先写入磁盘**
+- 仅**第一个** ````python``` 块在 `exec()` 中执行（注入工具、final_answer）
 - 零转义写文件，彻底解决 9B 模型字符串嵌套引号/转义失败
 
 ---
@@ -113,7 +111,7 @@ uv run python3 verify/verify.py
 ```
 
 三步验证：
-1. **Prompt 加载** — 确认 `config/prompts.json` 正确读取
+1. **Prompt 常量** — 确认 `prompts.py` 中 prefill 常量正确
 2. **模型连通性** — 调用 Ollama 模型返回简单回复
 3. **Deep Agent 循环优化** — Agent 编写质数筛法对比脚本并自动纠错（最多重试 10 次）
 
@@ -124,7 +122,7 @@ uv run python3 verify/verify.py
 ```
 mini_agent/
 ├── config/
-│   ├── prompts.json             # 极速流 prefill 配置
+│   ├── prompts.py             # 极速流 prefill 配置
 │   └── agents.json              # Provider + Model 配置
 ├── doc/                         # 按模块组织的文档
 │   ├── README.md                # 文档索引
@@ -132,7 +130,7 @@ mini_agent/
 │   ├── tools.md                 # tools.py — Tool 抽象、@tool、内置工具
 │   ├── code_executor.md         # code_executor.py — exec() 执行引擎
 │   ├── prompts.md               # prompts.py — 系统提示词、错误码 E001–E004
-│   ├── model.md                 # model.py — ResponsesModel、SSE、消息处理
+│   ├── model.md                 # model.py — ResponsesModel、非流式请求、消息处理
 │   ├── config.md                # config.py — 配置加载
 │   ├── agent.md                 # agent.py — 组合层、公共 API、两种模式
 │   └── architecture.md          # 整体架构、数据流、安全模型、与 smolagents 对比
@@ -184,7 +182,7 @@ mini_agent/
 | `tools.py` | [tools.md](doc/tools.md) | Tool 抽象、@tool 装饰器、```file:path``` 整文件重写 |
 | `code_executor.py` | [code_executor.md](doc/code_executor.md) | exec() 执行引擎、工具注入、final_answer |
 | `prompts.py` | [prompts.md](doc/prompts.md) | 系统提示词、错误码 E001–E004 |
-| `model.py` | [model.md](doc/model.md) | ResponsesModel、SSE、空白重试 |
+| `model.py` | [model.md](doc/model.md) | ResponsesModel、非流式请求、空白重试 |
 | `config.py` | [config.md](doc/config.md) | agents.json 加载 |
 | `agent.py` | [agent.md](doc/agent.md) | 组合层、run_fast_agent / run_deep_agent |
 | 整体 | [architecture.md](doc/architecture.md) | 数据流图、模块依赖、安全模型、与 smolagents 对比 |

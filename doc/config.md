@@ -2,7 +2,7 @@
 
 ## 概述
 
-加载 `config/agents.json` — 按 Provider 组织的模型配置（供 `run_deep_agent_with_config` 使用）。
+加载 `config/agents.json` — 按 Provider 组织的模型配置（供 `load_model()` 使用）。
 
 ---
 
@@ -15,12 +15,7 @@
     "max_output_tokens": 4096,
     "max_observation_length": 2000,
     "max_steps": 8,
-    "compressor": {
-      "max_messages": 20,
-      "compress_batch": 5,
-      "keep_recent": 6,
-      "max_summary_tokens": 512
-    }
+    "temperature": 0.0
   },
   "providers": {
     "ollama-local": {
@@ -31,7 +26,7 @@
           "max_output_tokens": 4096,
           "max_steps": 8,
           "max_observation_length": 8000,
-          "compressor": { ... }
+          "temperature": 0.0
         }
       }
     },
@@ -44,7 +39,7 @@
           "max_output_tokens": 4096,
           "max_steps": 15,
           "max_observation_length": 5000,
-          "compressor": { ... }
+          "temperature": 0.0
         }
       }
     }
@@ -63,42 +58,58 @@
 | model | `max_output_tokens` | 最大输出 token |
 | model | `max_steps` | ReAct 循环步数上限 |
 | model | `max_observation_length` | 观察截断长度 |
-| model | `compressor` | 上下文压缩器配置 |
+| model | `temperature` | 采样温度 |
 
 ---
 
-## load_agent_config()
+## load_model()
 
 ```python
-def load_agent_config(
+def load_model(
+    model_name: str,
+    provider_name: str | None = None,
+    *,
+    log_file: str | None = None,
+    reasoning: dict | None = None,
+    agents_path: str | Path | None = None,
+) -> tuple[ResponsesModel, SummaryCompressor]:
+```
+
+**行为：**
+1. 从 `agents.json` 读取配置（解析逻辑同旧 `load_agent_config`）
+2. 自动构造 `ResponsesModel`（temperature/context_window/max_output_tokens 等全从 JSON 读取）
+3. 返回 `(ResponsesModel, SummaryCompressor)` —— compressor 为新实例，每次调用独立
+
+**返回值：** `(model, compressor)` —— 直接可传给 `run_fast_agent(model)` / `run_deep_agent(model)`。
+
+---
+
+## 内部函数（不建议外部使用）
+
+```python
+def _load_agent_config(
     model_name: str,
     provider_name: str | None = None,
     agents_path: str | Path | None = None,
 ) -> dict:
 ```
 
-**解析逻辑（resolution order）：**
-1. 从 `defaults` 获取全局默认值
-2. 遍历 `providers`，找到包含 `model_name` 的 provider
-3. 若指定 `provider_name`，只在该 provider 内查找
-4. 合并 provider 的 `baseURL` / `apiKey`
-5. 用 model 配置覆盖同名 key
-
-**歧义处理：** 若 `model_name` 在多个 provider 下都存在且未指定 `provider_name`，抛出 `ValueError`。
-
-**返回 dict 包含：** `baseURL`, `apiKey`, `context_window`, `max_output_tokens`, `max_observation_length`, `max_steps`, `compressor`, `model_name`, `provider_name`。
+仅供内部/测试使用，返回扁平化配置 dict（包含 baseURL、apiKey、temperature 等）。
 
 ---
 
 ## 使用示例
 
 ```python
-from mini_agent import load_agent_config, run_deep_agent
+from mini_agent import load_model, run_fast_agent, run_deep_agent
 
-# 指定 provider
-model = load_agent_config("ornith:9b", provider_name="ollama-local")
-run_deep_agent("examples/data/out.py cannot run, find the problem and fix it.", model)
+# 最简单用法：provider + model 名
+model, compressor = load_model("ornith:9b", "ollama-local")
+result = run_fast_agent("Hello world", model)
 
-# 不指定 provider（自动查找，同名则抛 ValueError）
-model = load_agent_config("gpt-4o")
+# 带日志
+model, _ = load_model("ornith:9b", "ollama-local", log_file="run.jsonl")
+
+# 自定义 reasoning（如 o1 系列）
+model, _ = load_model("o1-mini", "openai", reasoning={"effort": "high"})
 ```

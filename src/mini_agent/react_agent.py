@@ -261,7 +261,10 @@ def react_loop(
     no_code_counter = 0            # consecutive steps without any code block
     # ---------------------------------------------------
 
-    stop_sequences = ["Observation:"]
+    # Observations are injected as user messages prefixed "[Result]". The stop
+    # sequence truncates the model's output if it starts role-playing the next
+    # turn ("[Result]\n..."), which 9B models occasionally do.
+    stop_sequences = ["[Result]"]
 
     _log(
         verbose,

@@ -50,14 +50,14 @@ run_deep_agent(prompt, model, max_steps)
            ├─ system_prompt = build_deep_system_prompt(tools)   # ~34 行
            ├─ messages = [system, user_task]
            ├─ for step in 1..max_steps:
-           │     ├─ model.generate(messages, stop_sequences=["Observation:"])
+           │     ├─ model.generate(messages, stop_sequences=["[Result]"])
              │     ├─ parse_step(output) → [(lang, path, content), ...]
              │     ├─ write_blocks(blocks) → ```file:path 整文件重写落盘
              │     ├─ 取首个 lang in {python,py} → exec_code
              │     ├─ execute_code(exec_code, tools) → ExecutionResult
              │     ├─ 错误恢复: E001–E004
            │     ├─ final_answer 检查 → 返回或继续
-           │     └─ messages.append(Observation) → 继续循环
+           │     └─ messages.append("[Result]") → 继续循环
            └─ return final_answer 或 fallback
 ```
 
@@ -105,7 +105,7 @@ Step N
   │                     ├─ wrote_target(写了文件) or final_answer → progress=0
   │                     └─ else → progress++ → ≥6: 停止
   │
-  └─ Append Observation → Next Step
+  └─ Append [Result] → Next Step
 ```
 
 ---

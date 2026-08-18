@@ -5,8 +5,7 @@ No external dependencies. These are plain dataclasses and enums.
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -30,13 +29,6 @@ class TokenUsage:
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
-    def dict(self) -> dict[str, int]:
-        return {
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "total_tokens": self.total_tokens,
-        }
-
 
 @dataclass
 class ChatMessage:
@@ -44,12 +36,6 @@ class ChatMessage:
     content: str | list[dict[str, Any]] | None = None
     raw: Any | None = None
     token_usage: TokenUsage | None = None
-
-    def dict(self) -> dict[str, Any]:
-        return {
-            "role": self.role.value if isinstance(self.role, MessageRole) else self.role,
-            "content": self.content,
-        }
 
 
 def remove_content_after_stop_sequences(

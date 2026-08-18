@@ -25,6 +25,7 @@ exec_ns["final_answer"] = final_answer
 ```
 
 ### `ExecutionResult`
+
 ```python
 @dataclass
 class ExecutionResult:
@@ -32,6 +33,7 @@ class ExecutionResult:
     logs: str                      # 捕获的 stdout
     is_final_answer: bool          # 是否调用了 final_answer()
     error: str | None              # 异常信息
+    error_type: str | None         # 异常类名（SyntaxError/IndentationError 等）
     tool_calls: list[str]          # 本轮调用过的工具名
 ```
 
@@ -71,11 +73,11 @@ execute_code(code, tools)
 ## 用法示例
 
 ```python
-from mini_agent import run_deep_agent, get_local_model
+from mini_agent import load_model, run_deep_agent
 from mini_agent.code_executor import execute_code
 from mini_agent.tools import run_python_file
 
-model = get_local_model("ornith:9b")
+model, _ = load_model("ornith:9b", "ollama-local")
 
 # 直接使用（不经过 ReAct 循环）
 code = """

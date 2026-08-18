@@ -42,7 +42,7 @@ class ChatMessage:
 在第一个停止序列处截断文本。
 
 ```python
-remove_content_after_stop_sequences("hello Observation: world", ["Observation:"])
+remove_content_after_stop_sequences("hello [Result] world", ["[Result]"])
 # → "hello "
 ```
 
