@@ -6,10 +6,14 @@ raw request/response logs. It does NOT explain *why* a test failed — that is
 the LLM's job, done by reading the listed ``fix_python_error_*.jsonl`` logs.
 
 Usage:
-    uv run python3 .agents/skills/iterative-tuning/analyze.py
-    uv run python3 .agents/skills/iterative-tuning/analyze.py --suite test_suite_2026-07-14_19-48-26.jsonl
-    uv run python3 .agents/skills/iterative-tuning/analyze.py --error E006
-    uv run python3 .agents/skills/iterative-tuning/analyze.py --failed
+    # First activate virtual environment
+    source .venv/bin/activate
+
+    # Then run
+    python3 .agents/skills/iterative-tuning/analyze.py
+    python3 .agents/skills/iterative-tuning/analyze.py --suite test_suite_2026-07-14_19-48-26.jsonl
+    python3 .agents/skills/iterative-tuning/analyze.py --error E004
+    python3 .agents/skills/iterative-tuning/analyze.py --failed
 """
 
 import argparse
@@ -20,20 +24,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 LOGS_DIR = BASE_DIR / "examples" / "logs"
 
-ERROR_MEANINGS: dict[str, str] = {
+# Error code descriptions (self-contained, no external dependency)
+ERROR_DESCRIPTIONS: dict[str, str] = {
     "E001": "No executable ```python``` block found in model output",
     "E002": "final_answer() called without any prior tool use",
     "E003": "final_answer() called after an error in previous step",
-    "E004": "Code only read/printed the file, never wrote it",
-    "E005": "Corrected code assigned to a variable but never written to disk",
-    "E006": "Code ran but did NOT save any changes to the file",
-    "E007": "Model emitted identical output 3+ times (stuck in a loop)",
-    "E008": "No write/verify progress for 6 consecutive steps",
-    "E009": "Hash-anchored edit failed — file changed since last read",
-    "E010": "Model's own code failed with SyntaxError (quote/escape conflict)",
-    "E011": "```file:``` or ```edit:``` block without a path",
-    "E012": "final_answer() called together with other tools in same step",
-    "E013": "```file:``` or ```edit:``` block has an invalid/placeholder path",
+    "E004": "Code ran but did NOT save any changes to the file",
 }
 
 
@@ -108,7 +104,7 @@ def _query_error(records: list[dict], code: str) -> None:
         print(f"  No tests recorded error code {code}.")
         return
 
-    print(f"  Error {code}: {ERROR_MEANINGS.get(code, '')}")
+    print(f"  Error {code}: {ERROR_DESCRIPTIONS.get(code, '')}")
     print(f"  Appeared in {len(matched)}/{len(records)} tests. Request/response logs:")
     print(f"  {'round_id':>8}  {'temp':>5}  {'ok':>3}  {'count':>5}  log_file")
     print(f"  {'-'*8}  {'-'*5}  {'-'*3}  {'-'*5}  {'-'*40}")

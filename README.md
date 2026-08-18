@@ -107,7 +107,11 @@ final_answer("Fixed")
 ## 验证
 
 ```bash
-uv run python3 verify/verify.py
+# 先激活虚拟环境
+source .venv/bin/activate
+
+# 运行验证
+python3 verify/verify.py
 ```
 
 三步验证：
