@@ -13,6 +13,7 @@ from .agent import (
     run_fast_agent,
     run_deep_agent,
 )
+from .chat import ChatSession
 from .config import load_model
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
@@ -26,6 +27,7 @@ __all__ = [
     "run_python_file",
     "run_fast_agent",
     "run_deep_agent",
+    "ChatSession",
     "ContextCompressor",
     "SummaryCompressor",
     "Tool",

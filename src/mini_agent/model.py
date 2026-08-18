@@ -2,13 +2,14 @@
 
 Uses local types only. Single non-streaming POST per call - simpler to debug;
 retry once (with a temperature bump) if the model returns a blank response.
+Also supports streaming via Server-Sent Events (SSE).
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -170,6 +171,87 @@ class ResponsesModel:
             raw=usage_data,
             token_usage=token_usage,
         )
+
+    def generate_stream(
+        self,
+        messages: list[ChatMessage | dict],
+        stop_sequences: list[str] | None = None,
+        **kwargs,
+    ) -> Iterator[str]:
+        """Generate a streaming response from the model via SSE.
+
+        Yields text chunks as they arrive from the model.
+
+        Args:
+            messages: List of messages (ChatMessage or dict).
+            stop_sequences: Stop sequences to truncate the output.
+
+        Yields:
+            Text chunks as they are generated.
+        """
+        # Build request body (same as generate but with stream=true)
+        cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
+
+        instructions: str | None = None
+        input_items: list[dict[str, str]] = []
+        for msg in cleaned:
+            role = msg.get("role", "user")
+            text = msg.get("content", "")
+            if not isinstance(text, str):
+                text = _flatten_content(msg)
+            if role == "system":
+                instructions = text
+            else:
+                input_items.append({"role": role, "content": text})
+
+        body: dict[str, Any] = {
+            "model": self.model_name,
+            "messages": input_items,
+            "temperature": self.temperature,
+            "max_tokens": self.max_output_tokens,
+            "stream": True,
+        }
+        if instructions:
+            body["system"] = instructions
+
+        # Use chat completions endpoint for streaming (more widely supported)
+        url = f"{self.api_base}/v1/chat/completions"
+        headers = {"Accept": "text/event-stream"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        self._log("request", body)
+
+        with self._client.stream("POST", url, json=body, headers=headers, timeout=httpx.Timeout(180.0, connect=10.0)) as resp:
+            resp.raise_for_status()
+            self._log("response", body, response_data={"stream": True})
+
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line = line.strip()
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]  # Remove "data: " prefix
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                # Extract delta from SSE event (OpenAI chat completions format)
+                choices = data.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    # Ollama puts content in delta.reasoning, OpenAI in delta.content
+                    content = delta.get("content") or delta.get("reasoning") or ""
+                    if content:
+                        yield content
+                    # Check for finish reason
+                    finish_reason = choices[0].get("finish_reason")
+                    if finish_reason:
+                        break
 
     # ------------------------------------------------------------------
     # Internal helpers
