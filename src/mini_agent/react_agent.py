@@ -279,10 +279,11 @@ def react_loop(
         if compressor is not None:
             before = len(messages)
             messages = compressor.compress(messages, model)
-            _log(
-                verbose and len(messages) < before,
-                f"[context] {before} -> {len(messages)} messages (compressed)",
-            )
+            if len(messages) < before:
+                _log(
+                    verbose,
+                    f"[context] {before} -> {len(messages)} messages (compressed)",
+                )
 
         # 0a. Token-based compress check (if compressor configured)
         if compressor is not None and hasattr(model, 'context_window') and hasattr(model, 'max_output_tokens'):
@@ -538,7 +539,7 @@ def react_loop(
 
         # 8. Add to conversation history
         messages.append({"role": "assistant", "content": output})
-        messages.append({"role": "user", "content": f"Observation:\n{observation}"})
+        messages.append({"role": "user", "content": f"[Result]\n{observation}"})
 
     # Max steps reached — try to extract a reasonable answer from last output
     _log(verbose, f"\n{'='*20} Max steps reached {'='*20}")
