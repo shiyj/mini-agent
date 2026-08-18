@@ -232,3 +232,26 @@ def test_deep_agent_rejects_final_answer_after_failed_run(tmp_path):
     result = run_deep_agent("fix app.py", model=stub, max_steps=5, verbose=False)
     assert result == "fixed"
     assert target.read_text(encoding="utf-8") == "print('ok')"
+
+
+@pytest.mark.skipif(shutil.which("python3") is None, reason="python3 not on PATH")
+def test_deep_agent_lazy_final_answer_rejected_until_reverified(tmp_path):
+    """Rule B target scenario: after a FAILED step, a bare final_answer with no
+    re-verification is rejected (E003); once the model re-runs the fixed file
+    successfully, final_answer is accepted even though the previous step errored."""
+    target = tmp_path / "app.py"
+    t = os.fspath(target)
+    outputs = [
+        # Step 1: write a broken script and run it (fails, no final_answer).
+        "```file:" + t + "\nraise RuntimeError('boom')\n```\n"
+        "```python\nrun_python_file('" + t + "')\n```\n",
+        # Step 2: lazy final_answer without re-verifying -> must be rejected.
+        "```python\nfinal_answer('done')\n```\n",
+        # Step 3: fix, re-run OK, final_answer -> accepted.
+        "```file:" + t + "\nprint('ok')\n```\n"
+        "```python\nrun_python_file('" + t + "')\nfinal_answer('fixed')\n```\n",
+    ]
+    stub = _StubModel(outputs)
+    result = run_deep_agent("fix app.py", model=stub, max_steps=5, verbose=False)
+    assert result == "fixed"
+    assert target.read_text(encoding="utf-8") == "print('ok')"

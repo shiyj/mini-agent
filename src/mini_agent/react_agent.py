@@ -301,10 +301,11 @@ def react_loop(
                 setattr(compressor, 'compress_batch', len(messages))
                 messages = compressor.compress(messages, model)
                 setattr(compressor, 'compress_batch', old_keep)
-                _log(
-                    verbose and len(messages) < before,
-                    f"[token-compress] {before} -> {len(messages)} messages",
-                )
+                if len(messages) < before:
+                    _log(
+                        verbose,
+                        f"[token-compress] {before} -> {len(messages)} messages",
+                    )
 
         # 1. Call the model. generate() accepts plain string content and cleans
         # merges consecutive same-role messages internally, so pass `messages`
@@ -489,7 +490,7 @@ def react_loop(
         if result.is_final_answer:
             # --- Rule B (E003): reject final_answer if this step errored, OR if a
             # previous step errored and this step did NOT re-verify the file ---
-            if step_had_error or (last_step_had_error and not_verified_this_step):
+            if step_had_error or (last_step_had_error and not verified_this_step):
                 error_summary = result.error or "previous step failed"
                 if not result.error and result.logs:
                     for marker in _ERROR_MARKERS:
