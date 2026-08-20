@@ -14,7 +14,11 @@ logs/
 .DS_Store
 examples/data/modify_python.py
 examples/data/requests.jsonl
+examples/data/get_system_info.py
+examples/data/system_info.py
+examples/gather_system_info.py
 .agents/skills/iterative-tuning/tuning_data/
 .agents/skills/iterative-tuning/INSPECTION_REPORT.md
 .agents/skills/iterative-tuning/bench_data/
 bench_data/
+data/

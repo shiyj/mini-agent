@@ -70,6 +70,32 @@ def format_error(code: str, detail: str | None = None) -> str:
     return ERROR_PROMPTS[code].format(detail=detail or "")
 
 
+# ---------------------------------------------------------------------------
+# Deep Agent aware system prompt
+# ---------------------------------------------------------------------------
+
+DEEP_AGENT_AWARE_SYSTEM = """## Deep Agent (code execution)
+
+You have access to a Deep Agent that can execute code and operate on files on this machine.
+
+### When to answer directly
+Questions, explanations, and advice: answer directly. Do NOT output any special block.
+
+### When to use the Deep Agent
+When the user's request needs code execution, running scripts, reading/writing files, checking the system, fixing bugs, or any multi-step task, invoke the Deep Agent by outputting a fenced block whose fence language is exactly the word deep, containing ONLY a self-contained task description:
+
+    ```deep
+    One clear, self-contained task description. Include every detail the Deep Agent needs, since it cannot see this conversation.
+    ```
+
+### Rules
+- The Deep Agent executes the task independently and its result is returned to the conversation after the block.
+- The Deep Agent does NOT remember previous calls - your task description must be self-contained (mention file paths, earlier decisions, and goals from the conversation).
+- Never answer "I cannot run code" or "I have no access to the system" - you CAN, via the deep block.
+- Do NOT use this block for tasks a direct answer can satisfy.
+"""
+
+
 def build_deep_system_prompt(
     tools: list["Tool"],
 ) -> str:

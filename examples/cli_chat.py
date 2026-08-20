@@ -1,21 +1,32 @@
 #!/usr/bin/env python3
-"""Interactive CLI chat — demonstrates ChatSession interactive mode with persistence."""
+"""Interactive CLI chat - ChatSession with Deep Agent (sub-agent) support."""
 
 from mini_agent import load_model, ChatSession
 
 
+HELP = """Commands:
+  /deep [task]   run a task through the Deep Agent (sub-agent). If no task is
+                 given inline, you will be prompted for it. Always triggers the
+                 Deep Agent - reliable code/file/system operations.
+  /history       show conversation history
+  /export [path] export history to JSON (default examples/logs/chat_export.json)
+  /reset         clear conversation history
+  /quit          exit
+Anything else is sent to the chat model, which may auto-invoke the Deep Agent
+(by emitting a ```deep block) when it decides the task needs code execution.
+"""
+
+
 def main():
     print("=" * 60)
-    print("Mini-Agent Interactive Chat")
+    print("Mini-Agent Interactive Chat (Deep Agent enabled)")
     print("=" * 60)
-    print("Commands: /quit quit  |  /reset reset  |  /history show history  |  /export <path> export")
+    print(HELP)
     print("=" * 60)
 
-    # Load model from config
     print("\nLoading model...")
     model, _ = load_model("ornith:9b", "ollama-local")
 
-    # Create chat session with persistence
     chat = ChatSession(
         model=model,
         system_prompt="You are a concise, professional programming assistant.",
@@ -25,7 +36,6 @@ def main():
 
     print(f"Session ID: {chat.session_id}")
     print(f"Persist path: {chat._persist_path}")
-    print(f"System prompt: {chat.system_prompt}")
     print("-" * 60)
 
     while True:
@@ -38,10 +48,13 @@ def main():
         if not user:
             continue
 
-        # Handle commands
+        # --- commands -------------------------------------------------------
         if user == "/quit":
             print("Goodbye!")
             break
+        elif user == "/help" or user == "/?":
+            print(HELP)
+            continue
         elif user == "/reset":
             chat.reset()
             print("Conversation reset.")
@@ -65,19 +78,34 @@ def main():
             except Exception as e:
                 print(f"Export failed: {e}")
             continue
+        elif user.startswith("/deep"):
+            task = user[5:].strip()
+            if not task:
+                try:
+                    task = input("Task: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("\nCanceled.")
+                    continue
+            if task:
+                print("\nDeep Agent is working (this may take a while)...", flush=True)
+                try:
+                    result = chat.deep_chat(task)
+                    print("\n--- Deep Agent result ---")
+                    print(result)
+                except Exception as e:
+                    print(f"\nDeep Agent error: {e}")
+            continue
 
-        # Normal chat - streaming output
+        # --- normal chat (streaming) ----------------------------------------
         try:
             print("Assistant: ", end="", flush=True)
             for chunk in chat.chat(user, stream=True):
                 print(chunk, end="", flush=True)
-            print()  # newline after streaming
+            print()
 
-            # Show token usage periodically
             tokens = chat.total_tokens
             if tokens["total"] > 0 and tokens["total"] % 5000 < 100:
                 print(f"  [Token: in={tokens['input']}, out={tokens['output']}, total={tokens['total']}]")
-
         except Exception as e:
             print(f"\nError: {e}")
 
