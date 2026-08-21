@@ -182,18 +182,16 @@ class ResponsesModel:
         stop_sequences: list[str] | None = None,
         **kwargs,
     ) -> Iterator[str]:
-        """Generate a streaming response from the model via SSE.
+        """Generate a streaming response via /v1/responses with stream=true.
+
+        Uses the SAME endpoint and body format as ``generate()`` so both paths
+        produce identical model behaviour (the earlier /v1/chat/completions
+        endpoint caused the model to lose system-prompt instructions, leading
+        to inconsistent Deep Agent triggering between blocking and streaming).
 
         Yields text chunks as they arrive from the model.
-
-        Args:
-            messages: List of messages (ChatMessage or dict).
-            stop_sequences: Stop sequences to truncate the output.
-
-        Yields:
-            Text chunks as they are generated.
         """
-        # Build request body (same as generate but with stream=true)
+        # Build request body - identical to generate() but with stream=true
         cleaned = get_clean_message_list(messages, flatten_messages_as_text=True)
 
         instructions: str | None = None
@@ -210,16 +208,17 @@ class ResponsesModel:
 
         body: dict[str, Any] = {
             "model": self.model_name,
-            "messages": input_items,
+            "input": input_items,
             "temperature": self.temperature,
-            "max_tokens": self.max_output_tokens,
+            "max_output_tokens": self.max_output_tokens,
             "stream": True,
         }
         if instructions:
-            body["system"] = instructions
+            body["instructions"] = instructions
+        if self.reasoning is not None:
+            body["reasoning"] = self.reasoning
 
-        # Use chat completions endpoint for streaming (more widely supported)
-        url = f"{self.api_base}/v1/chat/completions"
+        url = f"{self.api_base}/v1/responses"
         headers = {"Accept": "text/event-stream"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -236,7 +235,7 @@ class ResponsesModel:
                 line = line.strip()
                 if not line.startswith("data: "):
                     continue
-                data_str = line[6:]  # Remove "data: " prefix
+                data_str = line[6:]
                 if data_str == "[DONE]":
                     break
                 try:
@@ -244,18 +243,16 @@ class ResponsesModel:
                 except json.JSONDecodeError:
                     continue
 
-                # Extract delta from SSE event (OpenAI chat completions format)
-                choices = data.get("choices", [])
-                if choices:
-                    delta = choices[0].get("delta", {})
-                    # Ollama puts content in delta.reasoning, OpenAI in delta.content
-                    content = delta.get("content") or delta.get("reasoning") or ""
-                    if content:
-                        yield content
-                    # Check for finish reason
-                    finish_reason = choices[0].get("finish_reason")
-                    if finish_reason:
-                        break
+                event_type = data.get("type", "")
+                if event_type == "response.output_text.delta":
+                    delta = data.get("delta", "")
+                    if delta:
+                        yield delta
+                elif event_type == "response.completed":
+                    break
+                elif event_type == "response.error":
+                    err = data.get("error", {})
+                    raise RuntimeError(f"Model stream error: {err.get('message', 'unknown')}")
 
     # ------------------------------------------------------------------
     # Internal helpers

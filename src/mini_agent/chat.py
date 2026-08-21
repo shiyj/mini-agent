@@ -367,7 +367,12 @@ class ChatSession:
     def _chat_stream(
         self, user_text: str, stop_sequences: Optional[list[str]]
     ) -> Iterator[str]:
-        """Stream output, handling a trailing Deep Agent trigger if present."""
+        """Stream output, handling a trailing Deep Agent trigger if present.
+
+        The model's response is buffered first so that a ```deep block can be
+        detected and stripped before anything reaches the caller. Without this,
+        the raw ```deep text would leak to the user in streaming mode.
+        """
         if self._debug:
             print(f"[DEBUG] _chat_stream called with user_text={user_text!r}", flush=True)
         # Honor an explicit ```deep block in the user's message directly.
@@ -389,6 +394,8 @@ class ChatSession:
             yield self._chat_blocking(user_text, stop_sequences)
             return
 
+        # Buffer the full response before yielding, so we can detect and strip
+        # ```deep blocks. Streaming raw chunks would leak the trigger text.
         chunks: list[str] = []
         for chunk in self._model.generate_stream(
             messages=messages, stop_sequences=stop_sequences
@@ -396,20 +403,18 @@ class ChatSession:
             chunks.append(chunk)
             if self._debug:
                 print(f"[DEBUG] Streaming chunk: {chunk!r}", flush=True)
-            yield chunk
 
         content = "".join(chunks)
         task = self._extract_deep_trigger(content)
         if task:
             if self._debug:
-                print(f"[DEBUG] Deep agent trigger detected in stream: {task!r}", flush=True)
-            yield "\n\n---\n"
-            deep_result = self._run_deep_agent_safe(task)
-            yield deep_result
+                print(f"[DEBUG] Deep agent trigger detected: {task!r}", flush=True)
             clean = self._strip_deep_trigger(content)
+            deep_result = self._run_deep_agent_safe(task)
             final = f"{clean}\n\n---\n{deep_result}" if clean else deep_result
         else:
             final = content
+        yield final
         self._record_turn(user_text, final)
 
     def deep_chat(self, task: str) -> str:
