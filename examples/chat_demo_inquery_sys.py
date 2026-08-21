@@ -22,6 +22,9 @@ def main():
         model=model,
         system_prompt="You are a helpful assistant who knows a lot about computers.",
         enable_deep_agent=True,
+        # Deep Agent runs with verbose logging so the ReAct steps (read/file, run,
+        # observe, fix) are printed to stderr - useful to see the sub-agent work.
+        deep_agent_config={"verbose": True, "max_steps": 12},
     )
 
     # Plain chat() - the model auto-decides to use the Deep Agent

@@ -8,21 +8,24 @@
           "max_output_tokens": 4096,
           "max_steps": 8,
           "max_observation_length": 8000,
-          "temperature": 0.0
+          "temperature": 0.0,
+          "timeout": 600.0
         },
         "qwen3-coder": {
           "context_window": 131072,
           "max_output_tokens": 8192,
           "max_steps": 15,
           "max_observation_length": 5000,
-          "temperature": 0.0
+          "temperature": 0.0,
+          "timeout": 600.0
         },
         "glm-4.7-flash:latest": {
           "context_window": 131072,
           "max_output_tokens": 4096,
           "max_steps": 8,
           "max_observation_length": 3000,
-          "temperature": 0.0
+          "temperature": 0.0,
+          "timeout": 600.0
         }
       }
     },
@@ -35,14 +38,16 @@
           "max_output_tokens": 4096,
           "max_steps": 15,
           "max_observation_length": 5000,
-          "temperature": 0.0
+          "temperature": 0.0,
+          "timeout": 600.0
         },
         "gpt-4o-mini": {
           "context_window": 128000,
           "max_output_tokens": 4096,
           "max_steps": 8,
           "max_observation_length": 3000,
-          "temperature": 0.0
+          "temperature": 0.0,
+          "timeout": 600.0
         }
       }
     }
@@ -52,6 +57,7 @@
     "max_output_tokens": 4096,
     "max_observation_length": 2000,
     "max_steps": 8,
-    "temperature": 0.0
+    "temperature": 0.0,
+    "timeout": 600.0
   }
 }

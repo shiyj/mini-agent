@@ -63,6 +63,7 @@ class ResponsesModel:
         context_window: int = 65536,
         log_file: str | None = None,
         reasoning: dict[str, Any] | None = None,
+        timeout: float = 600.0,
         **kwargs,
     ):
         self.model_name = model_name
@@ -77,7 +78,10 @@ class ResponsesModel:
         self.context_window = context_window
         self.log_file = log_file
         self.reasoning = reasoning
-        self._client = httpx.Client(timeout=httpx.Timeout(180.0, connect=10.0))
+        self.timeout = timeout
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(self.timeout, connect=10.0)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -222,7 +226,7 @@ class ResponsesModel:
 
         self._log("request", body)
 
-        with self._client.stream("POST", url, json=body, headers=headers, timeout=httpx.Timeout(180.0, connect=10.0)) as resp:
+        with self._client.stream("POST", url, json=body, headers=headers, timeout=httpx.Timeout(self.timeout, connect=10.0)) as resp:
             resp.raise_for_status()
             self._log("response", body, response_data={"stream": True})
 

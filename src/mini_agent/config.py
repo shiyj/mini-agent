@@ -157,6 +157,7 @@ def load_model(
         temperature=config.get("temperature", 0.0),
         max_output_tokens=config.get("max_output_tokens", 4096),
         context_window=config.get("context_window", 65536),
+        timeout=config.get("timeout", 600.0),
         log_file=log_file,
         reasoning=reasoning,
     )
@@ -173,6 +174,7 @@ def _default_config(model_name: str) -> dict:
         "max_observation_length": 2000,
         "max_steps": 8,
         "temperature": 0.0,
+        "timeout": 600.0,
         "model_name": model_name,
         "provider_name": "",
     }

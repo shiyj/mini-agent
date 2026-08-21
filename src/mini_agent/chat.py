@@ -50,6 +50,7 @@ class ChatSession:
         enable_deep_agent: bool = True,
         deep_agent_config: Optional[dict] = None,
         max_history_turns: int = 20,
+        debug: bool = False,
     ):
         """
         Args:
@@ -84,6 +85,7 @@ class ChatSession:
                 "max_output_tokens": getattr(model, "max_output_tokens", None),
             },
         }
+        self._debug = debug
 
         if self._persist_path and self._persist_path.exists():
             self._load_history()
@@ -249,13 +251,14 @@ class ChatSession:
             f"## Task\n{task}\n\n"
             "## Important Instructions\n"
             "- Write NEW Python scripts to accomplish the task.\n"
-            "- Write each complete script with a ```file:<path>``` block, then run it "
-            "with run_python_file.\n"
+            "- For QUERY/INFO tasks (get time, check system, read data): just write and run "
+            "a script that prints the result, then call final_answer with the printed output. "
+            "You do NOT need to save any file to disk.\n"
+            "- For FILE-MODIFICATION tasks: write the file with a ```file:<path>``` block, "
+            "then run it with run_python_file to verify.\n"
             "- Do NOT try to read or run files that may not exist.\n"
-            "- Write the complete solution in one script and run it.\n"
-            "- The final_answer(x) argument MUST BE the actual deliverable. For a query or "
-            "report task, final_answer must contain the report text itself (paste the gathered "
-            "data into x). NEVER use a placeholder like 'done', 'fixed', or 'ok'."
+            "- The final_answer(x) argument MUST BE the actual deliverable (the report text, "
+            "the query result, etc). NEVER use a placeholder like 'done', 'fixed', or 'ok'."
         )
         return run_deep_agent(
             prompt=prompt,
@@ -334,11 +337,15 @@ class ChatSession:
         Returns:
             Assistant reply (str, or Iterator[str] when stream=True).
         """
+        if self._debug:
+            print(f"[DEBUG] ChatSession.chat() called with user_text={user_text!r}, stream={stream}", flush=True)
         if stream:
             return self._chat_stream(user_text, stop_sequences)
 
         explicit = self._extract_deep_trigger(user_text)
         if explicit:
+            if self._debug:
+                print(f"[DEBUG] Explicit deep trigger detected: {explicit!r}", flush=True)
             result = self._run_deep_agent_safe(explicit)
             self._record_turn(user_text, result)
             return result
@@ -346,20 +353,28 @@ class ChatSession:
         return self._chat_blocking(user_text, stop_sequences)
 
     def _chat_blocking(self, user_text: str, stop_sequences: Optional[list[str]]) -> str:
+        if self._debug:
+            print(f"[DEBUG] _chat_blocking called with user_text={user_text!r}", flush=True)
         messages = self._build_messages(user_text)
         response = self._model.generate(messages=messages, stop_sequences=stop_sequences)
         self._update_token_usage(response)
         content = self._handle_deep_trigger(response.content or "")
         self._record_turn(user_text, content)
+        if self._debug:
+            print(f"[DEBUG] _chat_blocking response: {content[:200]!r}...", flush=True)
         return content
 
     def _chat_stream(
         self, user_text: str, stop_sequences: Optional[list[str]]
     ) -> Iterator[str]:
         """Stream output, handling a trailing Deep Agent trigger if present."""
+        if self._debug:
+            print(f"[DEBUG] _chat_stream called with user_text={user_text!r}", flush=True)
         # Honor an explicit ```deep block in the user's message directly.
         explicit = self._extract_deep_trigger(user_text)
         if explicit:
+            if self._debug:
+                print(f"[DEBUG] Explicit deep trigger in user message: {explicit!r}", flush=True)
             result = self._run_deep_agent_safe(explicit)
             self._record_turn(user_text, result)
             yield result
@@ -369,6 +384,8 @@ class ChatSession:
 
         if not hasattr(self._model, "generate_stream"):
             # Fall back to a single blocking call, yielded as one chunk.
+            if self._debug:
+                print("[DEBUG] Model doesn't support generate_stream, falling back to blocking", flush=True)
             yield self._chat_blocking(user_text, stop_sequences)
             return
 
@@ -377,11 +394,15 @@ class ChatSession:
             messages=messages, stop_sequences=stop_sequences
         ):
             chunks.append(chunk)
+            if self._debug:
+                print(f"[DEBUG] Streaming chunk: {chunk!r}", flush=True)
             yield chunk
 
         content = "".join(chunks)
         task = self._extract_deep_trigger(content)
         if task:
+            if self._debug:
+                print(f"[DEBUG] Deep agent trigger detected in stream: {task!r}", flush=True)
             yield "\n\n---\n"
             deep_result = self._run_deep_agent_safe(task)
             yield deep_result

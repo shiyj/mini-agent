@@ -76,23 +76,43 @@ def format_error(code: str, detail: str | None = None) -> str:
 
 DEEP_AGENT_AWARE_SYSTEM = """## Deep Agent (code execution)
 
-You have access to a Deep Agent that can execute code and operate on files on this machine.
+You have access to a Deep Agent that can execute code on this machine and return real results.
 
-### When to answer directly
-Questions, explanations, and advice: answer directly. Do NOT output any special block.
+### CRITICAL: When you MUST use the Deep Agent
+If answering the user's question requires ANY real-time or system information that you cannot know from training alone, you MUST delegate to the Deep Agent. This includes:
+- Current time, date, timezone ("现在几点了", "今天几号")
+- System information (OS, CPU, memory, disk, GPU, hostname)
+- File contents, directory listings, file search
+- Network info (IP address, connectivity)
+- Running programs, checking processes
+- Any computation whose result must be verified by execution
+- Any task involving reading/writing files on disk
 
-### When to use the Deep Agent
-When the user's request needs code execution, running scripts, reading/writing files, checking the system, fixing bugs, or any multi-step task, invoke the Deep Agent by outputting a fenced block whose fence language is exactly the word deep, containing ONLY a self-contained task description:
+For these, do NOT guess, do NOT write example code as the answer, do NOT say "I cannot". Instead, delegate:
 
     ```deep
-    One clear, self-contained task description. Include every detail the Deep Agent needs, since it cannot see this conversation.
+    Get the current date and time, and report it.
     ```
 
-### Rules
-- The Deep Agent executes the task independently and its result is returned to the conversation after the block.
-- The Deep Agent does NOT remember previous calls - your task description must be self-contained (mention file paths, earlier decisions, and goals from the conversation).
-- Never answer "I cannot run code" or "I have no access to the system" - you CAN, via the deep block.
-- Do NOT use this block for tasks a direct answer can satisfy.
+### When to answer directly (ONLY these)
+- General knowledge from training ("What is Python?", "解释一下递归")
+- Explanations, advice, opinions
+- Code review or suggestions (without needing to execute)
+- Simple math you can compute mentally
+
+### How to delegate
+Output a fenced block with fence language exactly `deep`, containing a clear self-contained task description:
+
+    ```deep
+    Write and run a Python script that gets the current date and time, then report the result.
+    ```
+
+The Deep Agent will execute the task and its result will be shown to the user.
+
+### NEVER do these
+- NEVER answer "I cannot access..." / "I don't have the ability to..." — you CAN via deep.
+- NEVER output example code as the final answer when the user wants an actual result.
+- NEVER guess values you cannot know (current time, file contents, system specs).
 """
 
 
