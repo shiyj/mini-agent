@@ -7,6 +7,8 @@ the Deep Agent protocol into the system prompt; the model decides on its own
 to emit a ```deep block, which ChatSession parses and routes to run_deep_agent.
 """
 
+from datetime import datetime
+
 from mini_agent import load_model, ChatSession
 
 
@@ -15,7 +17,9 @@ def main():
     print("System Info Inquiry via plain chat() + auto Deep Agent")
     print("=" * 60)
     print("\nLoading model...")
-    model, _ = load_model("ornith:9b", "ollama-local")
+    log_file = f"examples/logs/sys_query_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    model, _ = load_model("ornith:9b", "ollama-local", log_file=log_file)
+    print(f"Request/response log: {log_file}")
 
     # Simple system prompt - Deep Agent capability is auto-injected by ChatSession
     chat = ChatSession(

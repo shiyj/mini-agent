@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Chat session demo — demonstrates ChatSession features."""
 
+from datetime import datetime
+
 from mini_agent import load_model, ChatSession
 
 
 def main():
     # 1. Load model from config (provider + model name)
     print("Loading model from config...")
-    model, _ = load_model("ornith:9b", "ollama-local")
+    log_file = f"examples/logs/chat_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    model, _ = load_model("ornith:9b", "ollama-local", log_file=log_file)
+    print(f"Request/response log: {log_file}")
 
     # 2. Create chat session with custom system prompt
     chat = ChatSession(

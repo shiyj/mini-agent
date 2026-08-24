@@ -25,7 +25,9 @@ def main():
     print("=" * 60)
 
     print("\nLoading model...")
-    model, _ = load_model("ornith:9b", "ollama-local")
+    log_file = f"examples/logs/cli_chat_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+    model, _ = load_model("ornith:9b", "ollama-local", log_file=log_file)
+    print(f"Request/response log: {log_file}")
 
     chat = ChatSession(
         model=model,

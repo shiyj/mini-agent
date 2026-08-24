@@ -4,10 +4,14 @@
 Run:  python examples/fast_vs_deep.py
 """
 
+from datetime import datetime
+
 from mini_agent import ResponsesModel, load_model, run_fast_agent, run_deep_agent
 
+LOG_FILE = f"examples/logs/fast_vs_deep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+
 # Fast agent: model straight from config (provider + model name, zero params)
-fast_model, _ = load_model("ornith:9b", "ollama-local")
+fast_model, _ = load_model("ornith:9b", "ollama-local", log_file=LOG_FILE)
 
 # Deep agent: manual ResponsesModel for a custom temperature - use this when
 # you need full control instead of config defaults
@@ -15,6 +19,7 @@ deep_model = ResponsesModel(
     model_name="ornith:9b",
     api_base="http://127.0.0.1:11434",
     temperature=0.4,
+    log_file=LOG_FILE,
 )
 
 TASK = (
