@@ -71,49 +71,26 @@ def format_error(code: str, detail: str | None = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Deep Agent aware system prompt
-# ---------------------------------------------------------------------------
+DEEP_AGENT_AWARE_SYSTEM = """[Tool available: deep = run code on this machine and return the real result]
 
-DEEP_AGENT_AWARE_SYSTEM = """## Deep Agent (code execution)
+When the user asks for anything you do not already know from training (current time, dates, file contents, system state, any "right now" or "what is X" where X must be looked up), output EXACTLY this block in the user's own language:
 
-You have access to a Deep Agent that can execute code on this machine and return real results.
+```
+```deep
+<task in the user's language, concise, no English>
+```
+```
 
-### CRITICAL: When you MUST use the Deep Agent
-If answering the user's question requires ANY real-time or system information that you cannot know from training alone, you MUST delegate to the Deep Agent. This includes:
-- Current time, date, timezone ("现在几点了", "今天几号")
-- System information (OS, CPU, memory, disk, GPU, hostname)
-- File contents, directory listings, file search
-- Network info (IP address, connectivity)
-- Running programs, checking processes
-- Any computation whose result must be verified by execution
-- Any task involving reading/writing files on disk
+The Deep Agent runs the task and returns the actual result. The user sees that result, NOT the block. Do not write the block AND a guessed answer.
 
-For these, do NOT guess, do NOT write example code as the answer, do NOT say "I cannot". Instead, delegate:
+When NOT to use deep: pure concept explanations, brainstorming, language translation, general-knowledge Q&A (e.g. "what is Python", "explain recursion", "write a poem").
 
-    ```deep
-    Get the current date and time, and report it.
-    ```
+Reply to the user in the same language they used in their question.
 
-### When to answer directly (ONLY these)
-- General knowledge from training ("What is Python?", "解释一下递归")
-- Explanations, advice, opinions
-- Code review or suggestions (without needing to execute)
-- Simple math you can compute mentally
-
-### How to delegate
-Output a fenced block with fence language exactly `deep`, containing a clear self-contained task description:
-
-    ```deep
-    Write and run a Python script that gets the current date and time, then report the result.
-    ```
-
-The Deep Agent will execute the task and its result will be shown to the user.
-
-### NEVER do these
-- NEVER answer "I cannot access..." / "I don't have the ability to..." — you CAN via deep.
-- NEVER output example code as the final answer when the user wants an actual result.
-- NEVER guess values you cannot know (current time, file contents, system specs).
-"""
+Hard rules (do not violate):
+- For any real-time or system query ("现在几点了", "今天日期", "list files in X", "what is the value of Y"), output a deep block. NEVER guess.
+- If unsure, use deep.
+- Never reply "I cannot" / "I don't have access" - the deep block IS the way you do it."""
 
 
 def build_deep_system_prompt(
