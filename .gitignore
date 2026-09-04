@@ -12,6 +12,8 @@ uv.lock
 logs/
 .omo/
 .DS_Store
+# Real .env (contains API keys) - use .env.example as template
+.env
 examples/data/modify_python.py
 examples/data/requests.jsonl
 examples/data/get_system_info.py

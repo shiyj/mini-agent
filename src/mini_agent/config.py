@@ -146,7 +146,13 @@ def load_model(
         The compressor is a FRESH instance per call - never shared - so
         concurrent agents cannot corrupt each other's state.
     """
+    from ._dotenv import load_dotenv_if_present
     from .model import ResponsesModel
+
+    # Auto-load a project-root .env so OPENAI_API_KEY / OPENROUTER_API_KEY
+    # etc. work out of the box for examples. Does nothing if .env is absent
+    # and never overrides variables already set in the process env.
+    load_dotenv_if_present()
 
     config = _load_agent_config(model_name, provider_name, agents_path)
 
