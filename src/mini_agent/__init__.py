@@ -17,11 +17,13 @@ from .chat import ChatSession
 from .config import load_model
 from .context import ContextCompressor, SummaryCompressor
 from .model import ResponsesModel
+from .model_picker import pick_model
 from .tools import Tool, tool
 from .types import ChatMessage, MessageRole, TokenUsage
 
 __all__ = [
     "load_model",
+    "pick_model",
     "ResponsesModel",
     "read_file",
     "run_python_file",

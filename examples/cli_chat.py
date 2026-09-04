@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive CLI chat - ChatSession with Deep Agent (sub-agent) support."""
 
-from mini_agent import load_model, ChatSession
+from mini_agent import load_model, ChatSession, pick_model
 
 
 HELP = """Commands:
@@ -26,7 +26,13 @@ def main():
 
     print("\nLoading model...")
     log_file = f"examples/logs/cli_chat_{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    model, _ = load_model("ornith:9b", "ollama-local", log_file=log_file)
+    model_name, provider_name = pick_model()
+    print(f"\nSelected: {model_name}" + (f" (provider: {provider_name})" if provider_name else ""))
+    model, _ = load_model(
+        model_name=model_name,
+        provider_name=provider_name,
+        log_file=log_file,
+    )
     print(f"Request/response log: {log_file}")
 
     chat = ChatSession(

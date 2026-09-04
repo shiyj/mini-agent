@@ -50,6 +50,20 @@
           "timeout": 600.0
         }
       }
+    },
+    "openrouter": {
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiKey": "${OPENROUTER_API_KEY}",
+      "models": {
+        "poolside/laguna-xs-2.1:free": {
+          "context_window": 262144,
+          "max_output_tokens": 8192,
+          "max_steps": 8,
+          "max_observation_length": 5000,
+          "temperature": 0.0,
+          "timeout": 600.0
+        }
+      }
     }
   },
   "defaults": {

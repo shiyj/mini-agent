@@ -1,17 +1,41 @@
 #!/usr/bin/env python3
 """Chat session demo — demonstrates ChatSession features."""
 
+import sys
 from datetime import datetime
 
-from mini_agent import load_model, ChatSession
+from mini_agent import load_model, ChatSession, pick_model
 
 
-def main():
-    # 1. Load model from config (provider + model name)
+def main(argv: list[str] | None = None) -> None:
+    """Demo of ChatSession.
+
+    Usage:
+        python3 examples/chat_demo.py                                # interactive picker
+        python3 examples/chat_demo.py gpt-4o                         # by model name
+        python3 examples/chat_demo.py openai/gpt-4o                  # by provider/model
+        MINI_AGENT_DEFAULT_MODEL=openai/gpt-4o python3 examples/chat_demo.py
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # 1. Load model - via CLI picker, default env, or CLI arg override
     print("Loading model from config...")
     log_file = f"examples/logs/chat_demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
-    model, _ = load_model("ornith:9b", "ollama-local", log_file=log_file)
+
+    if argv:
+        # First CLI arg is treated as a "provider/model" or "model" override
+        # (resolved by pick_model against agents.json).
+        model_name, provider_name = pick_model(default=argv[0])
+    else:
+        model_name, provider_name = pick_model()
+
     print(f"Request/response log: {log_file}")
+    print(f"Selected: {model_name}" + (f" (provider: {provider_name})" if provider_name else ""))
+    model, _ = load_model(
+        model_name=model_name,
+        provider_name=provider_name,
+        log_file=log_file,
+    )
 
     # 2. Create chat session with custom system prompt
     chat = ChatSession(
